@@ -3,7 +3,8 @@ import { ConfigurationChangeEvent, Disposable, ExtensionContext, languages, Text
 import { configuration, ICodeLensConfig } from './configuration';
 import { CommandContext, setCommandContext } from './constants';
 import { GitCodeLensProvider } from './gitCodeLensProvider';
-import { BlameabilityChangeEvent, BlameabilityChangeReason, GitContextTracker, GitService } from './gitService';
+// import { BlameabilityChangeEvent, BlameabilityChangeReason, GitContextTracker, GitService } from './gitService';
+import { GitContextTracker, GitService } from './gitService';
 import { Logger } from './logger';
 
 export class CodeLensController extends Disposable {
@@ -16,13 +17,13 @@ export class CodeLensController extends Disposable {
     constructor(
         private readonly context: ExtensionContext,
         private readonly git: GitService,
-        private readonly gitContextTracker: GitContextTracker
+        readonly gitContextTracker: GitContextTracker
     ) {
         super(() => this.dispose());
 
         this._disposable = Disposable.from(
-            configuration.onDidChange(this.onConfigurationChanged, this),
-            this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+            configuration.onDidChange(this.onConfigurationChanged, this)
+            // this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
         );
         this.onConfigurationChanged(configuration.initializingChangeEvent);
     }
@@ -66,15 +67,15 @@ export class CodeLensController extends Disposable {
         }
     }
 
-    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
-        if (this._provider === undefined) return;
+    // private onBlameabilityChanged(e: BlameabilityChangeEvent) {
+    //     if (this._provider === undefined) return;
 
-        // Don't reset if this was an editor change, because code lens will naturally be re-rendered
-        if (e.blameable && e.reason !== BlameabilityChangeReason.EditorChanged) {
-            Logger.log('Blameability changed; resetting CodeLens provider');
-            this._provider.reset();
-        }
-    }
+    //     // Don't reset if this was an editor change, because code lens will naturally be re-rendered
+    //     if (e.blameable && e.reason !== BlameabilityChangeReason.EditorChanged) {
+    //         Logger.log('Blameability changed; resetting CodeLens provider');
+    //         this._provider.reset();
+    //     }
+    // }
 
     toggleCodeLens(editor: TextEditor) {
         if (!this._canToggle) return;

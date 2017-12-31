@@ -71,17 +71,19 @@ export abstract class AnnotationProviderBase extends Disposable {
                     this.editor.setDecorations(this.decoration, []);
                 }
             }
-            catch (ex) { }
+            catch { }
         }
     }
 
-    async reset(decoration: TextEditorDecorationType | undefined, highlightDecoration: TextEditorDecorationType | undefined) {
-        await this.clear();
+    async reset(changes?: { decoration: TextEditorDecorationType | undefined, highlightDecoration: TextEditorDecorationType | undefined }) {
+        if (changes !== undefined) {
+            await this.clear();
+
+            this.decoration = changes.decoration;
+            this.highlightDecoration = changes.highlightDecoration;
+        }
 
         this._config = configuration.get<IConfig>();
-        this.decoration = decoration;
-        this.highlightDecoration = highlightDecoration;
-
         await this.provideAnnotation(this.editor === undefined ? undefined : this.editor.selection.active.line);
     }
 

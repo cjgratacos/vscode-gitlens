@@ -21,12 +21,24 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
     ) {
         super(context, editor, decoration, highlightDecoration);
 
-        this._blame = this.git.getBlameForFile(this.uri);
+        this._blame = editor.document.isDirty
+            ? this.git.getBlameForFileContents(this.uri, editor.document.getText())
+            : this.git.getBlameForFile(this.uri);
     }
 
     async clear() {
         this._hoverProviderDisposable && this._hoverProviderDisposable.dispose();
         super.clear();
+    }
+
+    async reset(changes?: { decoration: TextEditorDecorationType | undefined, highlightDecoration: TextEditorDecorationType | undefined }) {
+        if (this.editor !== undefined) {
+            this._blame = this.editor.document.isDirty
+                ? this.git.getBlameForFileContents(this.uri, this.editor.document.getText())
+                : this.git.getBlameForFile(this.uri);
+        }
+
+        super.reset(changes);
     }
 
     async selection(shaOrLine?: string | number, blame?: GitBlame) {

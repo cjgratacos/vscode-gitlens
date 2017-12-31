@@ -168,11 +168,11 @@ export class AnnotationController extends Disposable {
                 if (provider === undefined) continue;
 
                 if (provider.annotationType === FileAnnotationType.RecentChanges) {
-                    provider.reset(Decorations.recentChangesAnnotation, Decorations.recentChangesHighlight);
+                    provider.reset({ decoration: Decorations.recentChangesAnnotation, highlightDecoration: Decorations.recentChangesHighlight });
                 }
                 else {
                     if (provider.annotationType === cfg.blame.file.annotationType) {
-                        provider.reset(Decorations.blameAnnotation, Decorations.blameHighlight);
+                        provider.reset({ decoration: Decorations.blameAnnotation, highlightDecoration: Decorations.blameHighlight });
                     }
                     else {
                         this.showAnnotations(provider.editor, cfg.blame.file.annotationType);
@@ -204,13 +204,15 @@ export class AnnotationController extends Disposable {
         this.clear(e.editor, AnnotationClearReason.BlameabilityChanged);
     }
 
+    // Check debounce
     private onTextDocumentChanged(e: TextDocumentChangeEvent) {
-        if (!e.document.isDirty || !this.git.isTrackable(e.document.uri)) return;
+        // if (!e.document.isDirty || !this.git.isTrackable(e.document.uri)) return;
+        if (!this.git.isTrackable(e.document.uri)) return;
 
-        for (const [key, p] of this._annotationProviders) {
+        for (const p of this._annotationProviders.values()) {
             if (!TextDocumentComparer.equals(p.document, e.document)) continue;
 
-            this.clearCore(key, AnnotationClearReason.DocumentClosed);
+            p.reset();
         }
     }
 

@@ -1,6 +1,6 @@
 'use strict';
 import { Functions, IDeferred } from './system';
-import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, window } from 'vscode';
+import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextDocumentChangeEvent, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
 import { AnnotationController, FileAnnotationType } from './annotations/annotationController';
 import { Annotations, endOfLineIndex } from './annotations/annotations';
 import { Commands } from './commands';
@@ -28,7 +28,7 @@ export class CurrentLineController extends Disposable {
     private _blameable: boolean;
     private _blameLineAnnotationState: { enabled: boolean, annotationType: LineAnnotationType, reason: 'user' | 'debugging' } | undefined;
     private _config: IConfig;
-    private _currentLine: { line: number, commit?: GitCommit, logCommit?: GitLogCommit } = { line: -1 };
+    private _currentLine: { line: number, commit?: GitCommit, logCommit?: GitLogCommit, dirty?: boolean } = { line: -1 };
     private _debugSessionEndDisposable: Disposable | undefined;
     private _disposable: Disposable;
     private _editor: TextEditor | undefined;
@@ -115,6 +115,7 @@ export class CurrentLineController extends Disposable {
         if (trackCurrentLine) {
             this._trackCurrentLineDisposable = this._trackCurrentLineDisposable || Disposable.from(
                 window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
+                workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
                 window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
                 this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
             );
@@ -178,6 +179,14 @@ export class CurrentLineController extends Disposable {
         this.refresh(window.activeTextEditor);
     }
 
+    private async onTextDocumentChanged(e: TextDocumentChangeEvent) {
+        if (this._currentLine.dirty) return;
+
+        this._currentLine.dirty = true;
+
+        this.clear(this._editor);
+    }
+
     private async onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent): Promise<void> {
         // Make sure this is for the editor we are tracking
         if (!this._blameable || !TextEditorComparer.equals(this._editor, e.textEditor)) return;
@@ -188,6 +197,7 @@ export class CurrentLineController extends Disposable {
         this._currentLine.line = line;
         this._currentLine.commit = undefined;
         this._currentLine.logCommit = undefined;
+        this._currentLine.dirty = undefined;
 
         if (this._uri === undefined && e.textEditor !== undefined) {
             this._uri = await GitUri.fromUri(e.textEditor.document.uri, this.git);
@@ -214,12 +224,15 @@ export class CurrentLineController extends Disposable {
         this._currentLine.line = line;
         this._currentLine.commit = undefined;
         this._currentLine.logCommit = undefined;
+        this._currentLine.dirty = undefined;
 
         let commit: GitCommit | undefined = undefined;
         let commitLine: GitCommitLine | undefined = undefined;
         // Since blame information isn't valid when there are unsaved changes -- don't show any status
         if (this._blameable && line >= 0) {
-            const blameLine = await this.git.getBlameForLine(this._uri, line);
+            const blameLine = editor.document.isDirty
+                ? await this.git.getBlameForLineContents(this._uri, line, editor.document.getText())
+                : await this.git.getBlameForLine(this._uri, line);
 
             // Make sure we are still blameable after the await
             if (this._blameable) {
@@ -239,6 +252,8 @@ export class CurrentLineController extends Disposable {
     }
 
     async clear(editor: TextEditor | undefined) {
+        this._updateBlameDebounced.cancel();
+
         this.unregisterHoverProviders();
         this.clearAnnotations(editor, true);
         this._statusBarItem && this._statusBarItem.hide();
