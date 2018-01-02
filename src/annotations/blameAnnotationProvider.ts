@@ -5,7 +5,7 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitBlame, GitCommit, GitService, GitUri } from '../gitService';
+import { GitBlame, GitCommit, GitContextTracker, GitService, GitUri } from '../gitService';
 
 export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase {
 
@@ -15,12 +15,13 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
     constructor(
         context: ExtensionContext,
         editor: TextEditor,
+        gitContextTracker: GitContextTracker,
         decoration: TextEditorDecorationType | undefined,
         highlightDecoration: TextEditorDecorationType | undefined,
         protected readonly git: GitService,
         protected readonly uri: GitUri
     ) {
-        super(context, editor, decoration, highlightDecoration);
+        super(context, editor, gitContextTracker, decoration, highlightDecoration);
 
         this._blame = editor.document.isDirty
             ? this.git.getBlameForFileContents(this.uri, editor.document.getText())

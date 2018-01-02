@@ -687,10 +687,10 @@ export class GitService extends Disposable {
         }
     }
 
-    async getBlameForLineContents(uri: GitUri, line: number, contents: string): Promise<GitBlameLine | undefined> {
+    async getBlameForLineContents(uri: GitUri, line: number, contents: string, options: { skipCache?: boolean } = {}): Promise<GitBlameLine | undefined> {
         Logger.log(`getBlameForLineContents('${uri.repoPath}', '${uri.fsPath}', ${line})`);
 
-        if (this.UseCaching) {
+        if (!options.skipCache && this.UseCaching) {
             const blame = await this.getBlameForFileContents(uri, contents);
             if (blame === undefined) return undefined;
 

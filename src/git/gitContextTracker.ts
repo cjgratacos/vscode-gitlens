@@ -1,9 +1,9 @@
 'use strict';
 import { Functions, IDeferred } from '../system';
-import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocumentChangeEvent, TextEditor, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
+import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextDocumentChangeEvent, TextEditor, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
 import { TextDocumentComparer } from '../comparers';
 import { configuration } from '../configuration';
-import { CommandContext, isTextEditor, setCommandContext } from '../constants';
+import { CommandContext, isTextEditor, RangeEndOfLineIndex, setCommandContext } from '../constants';
 import { GitChangeEvent, GitChangeReason, GitService, GitUri, Repository, RepositoryChangeEvent } from '../gitService';
 import { Logger } from '../logger';
 
@@ -22,10 +22,13 @@ export interface BlameabilityChangeEvent {
     reason: BlameabilityChangeReason;
 }
 
-export interface LineDirtyStateChangeEvent {
+export interface DirtyStateChangeEvent {
     editor: TextEditor | undefined;
 
     dirty: boolean;
+}
+
+export interface LineDirtyStateChangeEvent extends DirtyStateChangeEvent {
     line: number;
     lineDirty: boolean;
 }
@@ -54,6 +57,11 @@ export class GitContextTracker extends Disposable {
         return this._onDidChangeBlameability.event;
     }
 
+    private _onDidChangeDirtyState = new EventEmitter<DirtyStateChangeEvent>();
+    get onDidChangeDirtyState(): Event<DirtyStateChangeEvent> {
+        return this._onDidChangeDirtyState.event;
+    }
+
     private _onDidChangeLineDirtyState = new EventEmitter<LineDirtyStateChangeEvent>();
     get onDidChangeLineDirtyState(): Event<LineDirtyStateChangeEvent> {
         return this._onDidChangeLineDirtyState.event;
@@ -62,14 +70,20 @@ export class GitContextTracker extends Disposable {
     private readonly _context: Context = { state: { dirty: false } };
     private readonly _disposable: Disposable;
     private _listenersDisposable: Disposable | undefined;
-    private _onLineDirtyStateChangedDebounced: (() => void) & IDeferred;
+    private _fireDirtyStateChangedDebounced: (() => void) & IDeferred;
+
+    private _checkLineDirtyStateChangedDebounced: (() => void) & IDeferred;
+    private _fireLineDirtyStateChangedDebounced: (() => void) & IDeferred;
 
     constructor(
         private readonly git: GitService
     ) {
         super(() => this.dispose());
 
-        this._onLineDirtyStateChangedDebounced = Functions.debounce(this.onLineDirtyStateChanged, 1000);
+        this._fireDirtyStateChangedDebounced = Functions.debounce(this.fireDirtyStateChanged, 1000);
+
+        this._checkLineDirtyStateChangedDebounced = Functions.debounce(this.checkLineDirtyStateChanged, 1000);
+        this._fireLineDirtyStateChangedDebounced = Functions.debounce(this.fireLineDirtyStateChanged, 1000);
 
         this._disposable = Disposable.from(
             workspace.onDidChangeConfiguration(this.onConfigurationChanged, this)
@@ -80,6 +94,19 @@ export class GitContextTracker extends Disposable {
     dispose() {
         this._listenersDisposable && this._listenersDisposable.dispose();
         this._disposable && this._disposable.dispose();
+    }
+
+    private _lineTrackingEnabled: boolean = false;
+
+    setLineTracking(editor: TextEditor | undefined, enabled: boolean) {
+        if (this._context.editor !== editor) return;
+
+        // If we are changing line tracking, reset the current line info, so we will refresh
+        if (this._lineTrackingEnabled !== enabled) {
+            this._context.state.line = undefined;
+            this._context.state.lineDirty = undefined;
+        }
+        this._lineTrackingEnabled = enabled;
     }
 
     private onConfigurationChanged(e: ConfigurationChangeEvent) {
@@ -115,6 +142,10 @@ export class GitContextTracker extends Disposable {
 
         // Logger.log('GitContextTracker.onActiveTextEditorChanged', editor && editor.document.uri.fsPath);
 
+        // Reset the current line info, so we will refresh
+        this._context.state.line = undefined;
+        this._context.state.lineDirty = undefined;
+
         this.updateContext(BlameabilityChangeReason.EditorChanged, editor, true);
     }
 
@@ -122,15 +153,6 @@ export class GitContextTracker extends Disposable {
         if (this._context.editor === undefined || key !== this.git.getCacheEntryKey(this._context.editor.document.uri)) return;
 
         this.updateBlameability(BlameabilityChangeReason.BlameFailed, false);
-    }
-
-    private onLineDirtyStateChanged() {
-        this._onDidChangeLineDirtyState.fire({
-            editor: this._context.editor,
-            dirty: this._context.state.dirty,
-            line: this._context.state.line,
-            lineDirty: this._context.state.lineDirty
-        } as LineDirtyStateChangeEvent);
     }
 
     private onGitChanged(e: GitChangeEvent) {
@@ -148,30 +170,78 @@ export class GitContextTracker extends Disposable {
         if (this._context.editor === undefined || !TextDocumentComparer.equals(this._context.editor.document, e.document)) return;
 
         const dirty = e.document.isDirty;
-
         const line = (this._context.editor && this._context.editor.selection.active.line) || -1;
 
-        if (dirty === this._context.state.dirty && this._context.state.line === line && this._context.state.lineDirty === dirty) {
-            // TODO: Only fire this when we are annotating
-            this._onLineDirtyStateChangedDebounced();
+        let changed = false;
+        if (this._context.state.dirty !== dirty || this._context.state.line !== line) {
+            changed = true;
+
+            this._context.state.dirty = dirty;
+            if (this._context.state.line !== line) {
+                this._context.state.lineDirty = undefined;
+            }
+            this._context.state.line = line;
+
+            if (dirty) {
+                this._fireDirtyStateChangedDebounced.cancel();
+                setImmediate(() => this.fireDirtyStateChanged());
+            }
+            else {
+                this._fireDirtyStateChangedDebounced();
+            }
+        }
+
+        if (!this._lineTrackingEnabled) return;
+
+        // If the file dirty state hasn't changed, check if the line has
+        if (!changed) {
+            this._checkLineDirtyStateChangedDebounced();
 
             return;
         }
 
-        // Logger.log('GitContextTracker.onTextDocumentChanged', `Dirty(${dirty}) state changed`);
-
-        this._context.state.dirty = dirty;
-        this._context.state.line = line;
         this._context.state.lineDirty = dirty;
 
         if (dirty) {
-            this._onLineDirtyStateChangedDebounced.cancel();
-            setImmediate(() => this.onLineDirtyStateChanged());
-
-            return;
+            this._fireLineDirtyStateChangedDebounced.cancel();
+            setImmediate(() => this.fireLineDirtyStateChanged());
         }
+        else {
+            this._fireLineDirtyStateChangedDebounced();
+        }
+    }
 
-        this._onLineDirtyStateChangedDebounced();
+    private async checkLineDirtyStateChanged() {
+        const line = this._context.state.line;
+        if (this._context.editor === undefined || line === undefined || line < 0) return;
+
+        // Since we only care about this one line, just pass empty lines to align the contents for blaming (and also skip using the cache)
+        const contents = `${' \n'.repeat(line)}${this._context.editor.document.getText(new Range(line, 0, line, RangeEndOfLineIndex))}\n`;
+        const blameLine = await this.git.getBlameForLineContents(this._context.uri!, line, contents, { skipCache: true });
+        const lineDirty = blameLine !== undefined && blameLine.commit.isUncommitted;
+
+        if (this._context.state.lineDirty !== lineDirty) {
+            this._context.state.lineDirty = lineDirty;
+
+            this._fireLineDirtyStateChangedDebounced.cancel();
+            setImmediate(() => this.fireLineDirtyStateChanged());
+        }
+    }
+
+    private fireDirtyStateChanged() {
+        this._onDidChangeDirtyState.fire({
+            editor: this._context.editor,
+            dirty: this._context.state.dirty
+        } as DirtyStateChangeEvent);
+    }
+
+    private fireLineDirtyStateChanged() {
+        this._onDidChangeLineDirtyState.fire({
+            editor: this._context.editor,
+            dirty: this._context.state.dirty,
+            line: this._context.state.line,
+            lineDirty: this._context.state.lineDirty
+        } as LineDirtyStateChangeEvent);
     }
 
     private onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent) {
@@ -230,7 +300,7 @@ export class GitContextTracker extends Disposable {
 
             if (this._context.state.dirty !== dirty) {
                 this._context.state.dirty = dirty;
-                this._onLineDirtyStateChangedDebounced();
+                this._fireDirtyStateChangedDebounced();
             }
 
             this.updateBlameability(reason, undefined, force);

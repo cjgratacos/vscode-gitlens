@@ -7,7 +7,7 @@ import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
-import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions, LineDirtyStateChangeEvent } from './gitService';
+import { BlameabilityChangeEvent, CommitFormatter, DirtyStateChangeEvent, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
 // import { Logger } from './logger';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -117,7 +117,7 @@ export class CurrentLineController extends Disposable {
                 window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
                 window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
                 this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
-                this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
+                this.gitContextTracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
             );
         }
         else if (this._trackCurrentLineDisposable !== undefined) {
@@ -179,8 +179,8 @@ export class CurrentLineController extends Disposable {
         this.refresh(window.activeTextEditor);
     }
 
-    private async onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
-        if (e.lineDirty) {
+    private async onDirtyStateChanged(e: DirtyStateChangeEvent) {
+        if (e.dirty) {
             this.clear(this._editor);
         }
         else {

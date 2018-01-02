@@ -3,6 +3,7 @@ import { DecorationOptions, Disposable, ExtensionContext, TextDocument, TextEdit
 import { FileAnnotationType } from '../annotations/annotationController';
 import { TextDocumentComparer } from '../comparers';
 import { configuration, IConfig } from '../configuration';
+import { GitContextTracker } from '../gitService';
 
 export type TextEditorCorrelationKey = string;
 
@@ -23,6 +24,7 @@ export abstract class AnnotationProviderBase extends Disposable {
     constructor(
         context: ExtensionContext,
         public editor: TextEditor,
+        protected readonly gitContextTracker: GitContextTracker,
         protected decoration: TextEditorDecorationType | undefined,
         protected highlightDecoration: TextEditorDecorationType | undefined
     ) {
@@ -61,6 +63,8 @@ export abstract class AnnotationProviderBase extends Disposable {
     }
 
     async clear() {
+        this.gitContextTracker.setLineTracking(this.editor, false);
+
         if (this.editor !== undefined) {
             try {
                 if (this.highlightDecoration !== undefined) {
@@ -88,6 +92,8 @@ export abstract class AnnotationProviderBase extends Disposable {
     }
 
     restore(editor: TextEditor, force: boolean = false) {
+        this.gitContextTracker.setLineTracking(this.editor, true);
+
         // If the editor isn't disposed then we don't need to do anything
         // Explicitly check for `false`
         if (!force && (this.editor as any)._disposed === false) return;
@@ -101,7 +107,13 @@ export abstract class AnnotationProviderBase extends Disposable {
         }
     }
 
-    abstract async provideAnnotation(shaOrLine?: string | number): Promise<boolean>;
+    provideAnnotation(shaOrLine?: string | number): Promise<boolean> {
+        this.gitContextTracker.setLineTracking(this.editor, true);
+
+        return this.onProvideAnnotation(shaOrLine);
+    }
+
+    abstract async onProvideAnnotation(shaOrLine?: string | number): Promise<boolean>;
     abstract async selection(shaOrLine?: string | number): Promise<void>;
     abstract async validate(): Promise<boolean>;
  }

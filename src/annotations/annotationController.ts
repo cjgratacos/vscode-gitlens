@@ -189,10 +189,14 @@ export class AnnotationController extends Disposable {
 
         const provider = this.getProvider(editor);
         if (provider === undefined) {
+            this.gitContextTracker.setLineTracking(editor, false);
+
             setCommandContext(CommandContext.AnnotationStatus, undefined);
             this.detachKeyboardHook();
         }
         else {
+            this.gitContextTracker.setLineTracking(editor, true);
+
             setCommandContext(CommandContext.AnnotationStatus, AnnotationStatus.Computed);
             this.attachKeyboardHook();
         }
@@ -368,19 +372,19 @@ export class AnnotationController extends Disposable {
         let provider: AnnotationProviderBase | undefined = undefined;
         switch (type) {
             case FileAnnotationType.Gutter:
-                provider = new GutterBlameAnnotationProvider(this.context, editor, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
+                provider = new GutterBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
                 break;
 
             case FileAnnotationType.Heatmap:
-                provider = new HeatmapBlameAnnotationProvider(this.context, editor, Decorations.blameAnnotation, undefined, this.git, gitUri);
+                provider = new HeatmapBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, undefined, this.git, gitUri);
                 break;
 
             case FileAnnotationType.Hover:
-                provider = new HoverBlameAnnotationProvider(this.context, editor, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
+                provider = new HoverBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
                 break;
 
             case FileAnnotationType.RecentChanges:
-                provider = new RecentChangesAnnotationProvider(this.context, editor, undefined, Decorations.recentChangesHighlight!, this.git, gitUri);
+                provider = new RecentChangesAnnotationProvider(this.context, editor, this.gitContextTracker, undefined, Decorations.recentChangesHighlight!, this.git, gitUri);
                 break;
         }
         if (provider === undefined || !(await provider.validate())) return false;

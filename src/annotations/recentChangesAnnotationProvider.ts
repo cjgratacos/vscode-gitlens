@@ -4,7 +4,7 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitService, GitUri } from '../gitService';
+import { GitContextTracker, GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 
 export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
@@ -12,15 +12,16 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
     constructor(
         context: ExtensionContext,
         editor: TextEditor,
+        gitContextTracker: GitContextTracker,
         decoration: TextEditorDecorationType | undefined,
         highlightDecoration: TextEditorDecorationType | undefined,
         private readonly git: GitService,
         private readonly uri: GitUri
     ) {
-        super(context, editor, decoration, highlightDecoration);
+        super(context, editor, gitContextTracker, decoration, highlightDecoration);
     }
 
-    async provideAnnotation(shaOrLine?: string | number): Promise<boolean> {
+    async onProvideAnnotation(shaOrLine?: string | number): Promise<boolean> {
         this.annotationType = FileAnnotationType.RecentChanges;
 
         const commit = await this.git.getLogCommit(this.uri.repoPath, this.uri.fsPath, { previous: true });
