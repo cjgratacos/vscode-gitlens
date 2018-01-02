@@ -93,7 +93,8 @@ export class GitCodeLensProvider implements CodeLensProvider {
         let blame: GitBlame | undefined;
         let symbols: SymbolInformation[] | undefined;
 
-        // if (!dirty) {
+        const insiders = configuration.get<boolean>(configuration.name('insiders').value);
+        if (!dirty || insiders) {
             gitUri = await GitUri.fromUri(document.uri, this.git);
 
             if (token.isCancellationRequested) return lenses;
@@ -110,13 +111,15 @@ export class GitCodeLensProvider implements CodeLensProvider {
 
             if (blame === undefined || blame.lines.length === 0) return lenses;
 
-            dirty = false;
-        // }
-        // else {
-        //     if (languageLocations.locations.length !== 1 || !languageLocations.locations.includes(CodeLensLocations.Document)) {
-        //         symbols = await commands.executeCommand(BuiltInCommands.ExecuteDocumentSymbolProvider, document.uri) as SymbolInformation[];
-        //     }
-        // }
+            if (insiders) {
+                dirty = false;
+            }
+        }
+        else {
+            if (languageLocations.locations.length !== 1 || !languageLocations.locations.includes(CodeLensLocations.Document)) {
+                symbols = await commands.executeCommand(BuiltInCommands.ExecuteDocumentSymbolProvider, document.uri) as SymbolInformation[];
+            }
+        }
 
         if (token.isCancellationRequested) return lenses;
 

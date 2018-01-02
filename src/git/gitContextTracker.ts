@@ -75,6 +75,8 @@ export class GitContextTracker extends Disposable {
     private _checkLineDirtyStateChangedDebounced: (() => void) & IDeferred;
     private _fireLineDirtyStateChangedDebounced: (() => void) & IDeferred;
 
+    private _insiders = false;
+
     constructor(
         private readonly git: GitService
     ) {
@@ -110,7 +112,13 @@ export class GitContextTracker extends Disposable {
     }
 
     private onConfigurationChanged(e: ConfigurationChangeEvent) {
-        if (!configuration.initializing(e) && !e.affectsConfiguration('git.enabled', null!)) return;
+        const initializing = configuration.initializing(e);
+        if (!initializing && !e.affectsConfiguration('git.enabled', null!)) return;
+
+        const section = configuration.name('insiders').value;
+        if (initializing || configuration.changed(e, section)) {
+            this._insiders = configuration.get<boolean>(section);
+        }
 
         const enabled = workspace.getConfiguration('git', null!).get<boolean>('enabled', true);
         if (this._listenersDisposable !== undefined) {
@@ -191,7 +199,7 @@ export class GitContextTracker extends Disposable {
             }
         }
 
-        if (!this._lineTrackingEnabled) return;
+        if (!this._lineTrackingEnabled || !this._insiders) return;
 
         // If the file dirty state hasn't changed, check if the line has
         if (!changed) {
@@ -229,10 +237,15 @@ export class GitContextTracker extends Disposable {
     }
 
     private fireDirtyStateChanged() {
-        this._onDidChangeDirtyState.fire({
-            editor: this._context.editor,
-            dirty: this._context.state.dirty
-        } as DirtyStateChangeEvent);
+        if (this._insiders) {
+            this._onDidChangeDirtyState.fire({
+                editor: this._context.editor,
+                dirty: this._context.state.dirty
+            } as DirtyStateChangeEvent);
+        }
+        else {
+            this.updateBlameability(BlameabilityChangeReason.DocumentChanged);
+        }
     }
 
     private fireLineDirtyStateChanged() {
@@ -300,7 +313,9 @@ export class GitContextTracker extends Disposable {
 
             if (this._context.state.dirty !== dirty) {
                 this._context.state.dirty = dirty;
-                this._fireDirtyStateChangedDebounced();
+                if (this._insiders) {
+                    this._fireDirtyStateChangedDebounced();
+                }
             }
 
             this.updateBlameability(reason, undefined, force);
@@ -314,7 +329,9 @@ export class GitContextTracker extends Disposable {
     private updateBlameability(reason: BlameabilityChangeReason, blameable?: boolean, force: boolean = false) {
         try {
             if (blameable === undefined) {
-                blameable = this._context.state.tracked; // && !this._context.state.dirty;
+                blameable = this._insiders
+                    ? this._context.state.tracked
+                    : this._context.state.tracked && !this._context.state.dirty;
             }
 
             if (!force && this._context.state.blameable === blameable) return;

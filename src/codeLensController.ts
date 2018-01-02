@@ -3,8 +3,7 @@ import { ConfigurationChangeEvent, Disposable, ExtensionContext, languages, Text
 import { configuration, ICodeLensConfig } from './configuration';
 import { CommandContext, setCommandContext } from './constants';
 import { GitCodeLensProvider } from './gitCodeLensProvider';
-// import { BlameabilityChangeEvent, BlameabilityChangeReason, GitContextTracker, GitService } from './gitService';
-import { GitContextTracker, GitService } from './gitService';
+import { BlameabilityChangeEvent, BlameabilityChangeReason, GitContextTracker, GitService } from './gitService';
 import { Logger } from './logger';
 
 export class CodeLensController extends Disposable {
@@ -23,7 +22,6 @@ export class CodeLensController extends Disposable {
 
         this._disposable = Disposable.from(
             configuration.onDidChange(this.onConfigurationChanged, this)
-            // this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
         );
         this.onConfigurationChanged(configuration.initializingChangeEvent);
     }
@@ -51,7 +49,10 @@ export class CodeLensController extends Disposable {
                 }
                 else {
                     this._provider = new GitCodeLensProvider(this.context, this.git);
-                    this._providerDisposable = languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider);
+                    this._providerDisposable = Disposable.from(
+                        languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
+                        this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+                    );
                 }
             }
             else {
@@ -67,27 +68,33 @@ export class CodeLensController extends Disposable {
         }
     }
 
-    // private onBlameabilityChanged(e: BlameabilityChangeEvent) {
-    //     if (this._provider === undefined) return;
+    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
+        // Only reset if we have saved, since the code lens won't naturally be re-rendered
+        if (this._provider === undefined || !e.blameable || e.reason !== BlameabilityChangeReason.DocumentChanged) return;
 
-    //     // Don't reset if this was an editor change, because code lens will naturally be re-rendered
-    //     if (e.blameable && e.reason !== BlameabilityChangeReason.EditorChanged) {
-    //         Logger.log('Blameability changed; resetting CodeLens provider');
-    //         this._provider.reset();
-    //     }
-    // }
+        Logger.log('Blameability changed; resetting CodeLens provider');
+        this._provider.reset();
+    }
 
     toggleCodeLens(editor: TextEditor) {
         if (!this._canToggle) return;
 
         Logger.log(`toggleCodeLens()`);
-        if (this._providerDisposable !== undefined) {
-            this._providerDisposable.dispose();
-            this._providerDisposable = undefined;
+        if (this._provider !== undefined) {
+            if (this._providerDisposable !== undefined) {
+                this._providerDisposable.dispose();
+                this._providerDisposable = undefined;
+            }
+
+            this._provider = undefined;
 
             return;
         }
 
-        this._providerDisposable = languages.registerCodeLensProvider(GitCodeLensProvider.selector, new GitCodeLensProvider(this.context, this.git));
+        this._provider = new GitCodeLensProvider(this.context, this.git);
+        this._providerDisposable = Disposable.from(
+            languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
+            this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+        );
     }
 }
