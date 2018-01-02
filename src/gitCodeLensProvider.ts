@@ -69,7 +69,9 @@ export class GitCodeLensProvider implements CodeLensProvider {
     async provideCodeLenses(document: TextDocument, token: CancellationToken): Promise<CodeLens[]> {
         if (!await this.git.isTracked(document.uri.fsPath)) return [];
 
-        let dirty = document.isDirty;
+        const dirty = configuration.get<boolean>(configuration.name('insiders').value)
+            ? false
+            : document.isDirty;
 
         const cfg = configuration.get<ICodeLensConfig>(configuration.name('codeLens').value, document.uri);
         this._debug = cfg.debug;
@@ -93,8 +95,7 @@ export class GitCodeLensProvider implements CodeLensProvider {
         let blame: GitBlame | undefined;
         let symbols: SymbolInformation[] | undefined;
 
-        const insiders = configuration.get<boolean>(configuration.name('insiders').value);
-        if (!dirty || insiders) {
+        if (!dirty) {
             gitUri = await GitUri.fromUri(document.uri, this.git);
 
             if (token.isCancellationRequested) return lenses;
@@ -104,16 +105,14 @@ export class GitCodeLensProvider implements CodeLensProvider {
             }
             else {
                 [blame, symbols] = await Promise.all([
-                    dirty ? this.git.getBlameForFileContents(gitUri, document.getText()) : this.git.getBlameForFile(gitUri),
+                    document.isDirty
+                        ? this.git.getBlameForFileContents(gitUri, document.getText())
+                        : this.git.getBlameForFile(gitUri),
                     commands.executeCommand(BuiltInCommands.ExecuteDocumentSymbolProvider, document.uri) as Promise<SymbolInformation[]>
                 ]);
             }
 
             if (blame === undefined || blame.lines.length === 0) return lenses;
-
-            if (insiders) {
-                dirty = false;
-            }
         }
         else {
             if (languageLocations.locations.length !== 1 || !languageLocations.locations.includes(CodeLensLocations.Document)) {
