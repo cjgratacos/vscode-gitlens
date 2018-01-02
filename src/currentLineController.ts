@@ -1,13 +1,13 @@
 'use strict';
 import { Functions, IDeferred } from './system';
-import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextDocumentChangeEvent, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
+import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, window } from 'vscode';
 import { AnnotationController, FileAnnotationType } from './annotations/annotationController';
-import { Annotations, endOfLineIndex } from './annotations/annotations';
+import { Annotations } from './annotations/annotations';
 import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
-import { DocumentSchemes, isTextEditor } from './constants';
-import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
+import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
+import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions, LineDirtyStateChangeEvent } from './gitService';
 // import { Logger } from './logger';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -115,9 +115,9 @@ export class CurrentLineController extends Disposable {
         if (trackCurrentLine) {
             this._trackCurrentLineDisposable = this._trackCurrentLineDisposable || Disposable.from(
                 window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
-                workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
                 window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
-                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
+                this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
             );
         }
         else if (this._trackCurrentLineDisposable !== undefined) {
@@ -179,12 +179,13 @@ export class CurrentLineController extends Disposable {
         this.refresh(window.activeTextEditor);
     }
 
-    private async onTextDocumentChanged(e: TextDocumentChangeEvent) {
-        if (this._currentLine.dirty) return;
-
-        this._currentLine.dirty = true;
-
-        this.clear(this._editor);
+    private async onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
+        if (e.lineDirty) {
+            this.clear(this._editor);
+        }
+        else {
+            this.refresh(this._editor);
+        }
     }
 
     private async onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent): Promise<void> {
@@ -197,7 +198,6 @@ export class CurrentLineController extends Disposable {
         this._currentLine.line = line;
         this._currentLine.commit = undefined;
         this._currentLine.logCommit = undefined;
-        this._currentLine.dirty = undefined;
 
         if (this._uri === undefined && e.textEditor !== undefined) {
             this._uri = await GitUri.fromUri(e.textEditor.document.uri, this.git);
@@ -224,7 +224,6 @@ export class CurrentLineController extends Disposable {
         this._currentLine.line = line;
         this._currentLine.commit = undefined;
         this._currentLine.logCommit = undefined;
-        this._currentLine.dirty = undefined;
 
         let commit: GitCommit | undefined = undefined;
         let commitLine: GitCommitLine | undefined = undefined;
@@ -381,7 +380,7 @@ export class CurrentLineController extends Disposable {
 
         const cfg = this._config.annotations.line.trailing;
         const decoration = Annotations.trailing(commit, cfg.format, cfg.dateFormat === null ? this._config.defaultDateFormat : cfg.dateFormat);
-        decoration.range = editor.document.validateRange(new Range(line, endOfLineIndex, line, endOfLineIndex));
+        decoration.range = editor.document.validateRange(new Range(line, RangeEndOfLineIndex, line, RangeEndOfLineIndex));
 
         editor.setDecorations(annotationDecoration, [decoration]);
         this._isAnnotating = true;
@@ -429,7 +428,7 @@ export class CurrentLineController extends Disposable {
         const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && this._config.annotations.line.trailing.hover.wholeLine) ||
             fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.wholeLine);
 
-        const range = document.validateRange(new Range(position.line, wholeLine ? 0 : endOfLineIndex, position.line, endOfLineIndex));
+        const range = document.validateRange(new Range(position.line, wholeLine ? 0 : RangeEndOfLineIndex, position.line, RangeEndOfLineIndex));
         if (!wholeLine && range.start.character !== position.character) return undefined;
 
         // Get the full commit message -- since blame only returns the summary
@@ -467,7 +466,7 @@ export class CurrentLineController extends Disposable {
         const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && this._config.annotations.line.trailing.hover.wholeLine) ||
             fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.wholeLine);
 
-        const range = document.validateRange(new Range(position.line, wholeLine ? 0 : endOfLineIndex, position.line, endOfLineIndex));
+        const range = document.validateRange(new Range(position.line, wholeLine ? 0 : RangeEndOfLineIndex, position.line, RangeEndOfLineIndex));
         if (!wholeLine && range.start.character !== position.character) return undefined;
 
         const hover = await Annotations.changesHover(commit, position.line, this._uri, this.git);

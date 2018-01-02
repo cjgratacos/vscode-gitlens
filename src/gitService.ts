@@ -271,7 +271,7 @@ export class GitService extends Disposable {
 
         if (!initializing) {
             // Defer the event trigger enough to let everything unwind
-            setTimeout(() => this.fireChange(GitChangeReason.Repositories), 1);
+            setImmediate(() => this.fireChange(GitChangeReason.Repositories));
         }
     }
 
@@ -1230,11 +1230,11 @@ export class GitService extends Disposable {
             this._repositoryTree.set(rp, repo);
 
             // Send a notification that the repositories changed
-            setTimeout(async () => {
+            setImmediate(async () => {
                 await setCommandContext(CommandContext.HasRepository, this._repositoryTree.any());
 
                 this.fireChange(GitChangeReason.Repositories);
-            }, 0);
+            });
         }
 
         return rp;

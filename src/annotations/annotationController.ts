@@ -1,11 +1,11 @@
 'use strict';
 import { Functions, Iterables } from '../system';
-import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOptions, Disposable, Event, EventEmitter, ExtensionContext, OverviewRulerLane, Progress, ProgressLocation, TextDocument, TextDocumentChangeEvent, TextEditor, TextEditorDecorationType, TextEditorViewColumnChangeEvent, ThemeColor, window, workspace } from 'vscode';
+import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOptions, Disposable, Event, EventEmitter, ExtensionContext, OverviewRulerLane, Progress, ProgressLocation, TextDocument, TextEditor, TextEditorDecorationType, TextEditorViewColumnChangeEvent, ThemeColor, window, workspace } from 'vscode';
 import { AnnotationProviderBase, TextEditorCorrelationKey } from './annotationProvider';
 import { TextDocumentComparer } from '../comparers';
 import { configuration, IConfig, LineHighlightLocations } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri } from '../gitService';
+import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri, LineDirtyStateChangeEvent } from '../gitService';
 import { GutterBlameAnnotationProvider } from './gutterBlameAnnotationProvider';
 import { HeatmapBlameAnnotationProvider } from './heatmapBlameAnnotationProvider';
 import { HoverBlameAnnotationProvider } from './hoverBlameAnnotationProvider';
@@ -204,13 +204,14 @@ export class AnnotationController extends Disposable {
         this.clear(e.editor, AnnotationClearReason.BlameabilityChanged);
     }
 
-    // Check debounce
-    private onTextDocumentChanged(e: TextDocumentChangeEvent) {
+    private onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
+        if (e.editor === undefined) return;
+
         // if (!e.document.isDirty || !this.git.isTrackable(e.document.uri)) return;
-        if (!this.git.isTrackable(e.document.uri)) return;
+        if (!this.git.isTrackable(e.editor.document.uri)) return;
 
         for (const p of this._annotationProviders.values()) {
-            if (!TextDocumentComparer.equals(p.document, e.document)) continue;
+            if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
 
             p.reset();
         }
@@ -395,9 +396,9 @@ export class AnnotationController extends Disposable {
                 window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
                 window.onDidChangeTextEditorViewColumn(this.onTextEditorViewColumnChanged, this),
                 window.onDidChangeVisibleTextEditors(this.onVisibleTextEditorsChanged, this),
-                workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
                 workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this),
-                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
+                this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
             );
         }
 

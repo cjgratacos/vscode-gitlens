@@ -1,8 +1,9 @@
 'use strict';
 import { DecorationOptions, ExtensionContext, MarkdownString, Position, Range, TextEditor, TextEditorDecorationType } from 'vscode';
-import { Annotations, endOfLineIndex } from './annotations';
 import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
+import { Annotations } from './annotations';
+import { RangeEndOfLineIndex } from '../constants';
 import { GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 
@@ -44,7 +45,7 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
 
                 if (line.state === 'unchanged') continue;
 
-                const range = this.editor.document.validateRange(new Range(new Position(count, 0), new Position(count, endOfLineIndex)));
+                const range = this.editor.document.validateRange(new Range(new Position(count, 0), new Position(count, RangeEndOfLineIndex)));
 
                 if (cfg.hover.details) {
                     this._decorations.push({
