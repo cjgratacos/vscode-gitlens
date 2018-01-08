@@ -211,6 +211,8 @@ export class AnnotationController extends Disposable {
     private onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
         if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
 
+        Logger.log('AnnotationController.onLineDirtyStateChanged', e.dirty);
+
         for (const p of this._annotationProviders.values()) {
             if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
 
