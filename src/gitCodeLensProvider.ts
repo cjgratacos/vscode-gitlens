@@ -101,7 +101,9 @@ export class GitCodeLensProvider implements CodeLensProvider {
             if (token.isCancellationRequested) return lenses;
 
             if (languageLocations.locations.length === 1 && languageLocations.locations.includes(CodeLensLocations.Document)) {
-                blame = await this.git.getBlameForFile(gitUri);
+                blame = document.isDirty
+                    ? await this.git.getBlameForFileContents(gitUri, document.getText())
+                    : await this.git.getBlameForFile(gitUri);
             }
             else {
                 [blame, symbols] = await Promise.all([

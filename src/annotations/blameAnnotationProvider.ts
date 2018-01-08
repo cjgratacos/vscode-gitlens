@@ -26,6 +26,10 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         this._blame = editor.document.isDirty
             ? this.git.getBlameForFileContents(this.uri, editor.document.getText())
             : this.git.getBlameForFile(this.uri);
+
+        if (editor.document.isDirty) {
+            this.gitContextTracker.setTriggerOnNextChange(editor.document);
+        }
     }
 
     async clear() {

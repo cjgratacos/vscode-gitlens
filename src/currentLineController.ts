@@ -7,7 +7,8 @@ import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
-import { BlameabilityChangeEvent, CommitFormatter, DirtyStateChangeEvent, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
+import { DocumentDirtyStateChangeEvent } from './DocumentTracker';
+import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
 import { Logger } from './logger';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -148,7 +149,7 @@ export class CurrentLineController extends Disposable {
         }
 
         this._blameable = e.blameable;
-        if (!e.blameable || this._editor === undefined) {
+        if (!this.canBlame || this._editor === undefined) {
             this._updateBlameDebounced.cancel();
             this.clear(e.editor!);
 
@@ -179,15 +180,36 @@ export class CurrentLineController extends Disposable {
         this.refresh(window.activeTextEditor);
     }
 
-    private async onDirtyStateChanged(e: DirtyStateChangeEvent) {
+    private _fooDebounced: (() => void) & IDeferrable;
+    private _considerDirty: boolean = false;
+
+    private async onDirtyStateChanged(e: DocumentDirtyStateChangeEvent) {
         Logger.log('CurrentLineController.onDirtyStateChanged', e.dirty);
 
+        this._considerDirty = e.dirty;
         if (e.dirty) {
             this.clear(this._editor);
+
+            if (this._fooDebounced === undefined) {
+                this._fooDebounced = Functions.debounce(() => {
+                    Logger.log('CurrentLineController.onDirtyStateChanged - clear');
+                    this._considerDirty = false;
+                }, 5000);
+            }
+
+            this._fooDebounced();
         }
         else {
+            if (this._fooDebounced !== undefined) {
+                this._fooDebounced.cancel();
+            }
+
             this.refresh(this._editor);
         }
+    }
+
+    private get canBlame() {
+        return this._blameable && !this._considerDirty;
     }
 
     private async onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent): Promise<void> {
@@ -205,8 +227,10 @@ export class CurrentLineController extends Disposable {
             this._uri = await GitUri.fromUri(e.textEditor.document.uri, this.git);
         }
 
-        this.clearAnnotations(e.textEditor);
-        this._updateBlameDebounced(line, e.textEditor);
+        if (this.canBlame) {
+            this.clearAnnotations(e.textEditor);
+            this._updateBlameDebounced(line, e.textEditor);
+        }
     }
 
     private getLineAnnotationState() {
@@ -230,7 +254,7 @@ export class CurrentLineController extends Disposable {
         let commit;
         let commitLine;
         // Since blame information isn't valid when there are unsaved changes -- don't show any status
-        if (this._blameable && line >= 0) {
+        if (this.canBlame && line >= 0) {
             const blameLine = editor.document.isDirty
                 ? await this.git.getBlameForLineContents(this._uri, line, editor.document.getText())
                 : await this.git.getBlameForLine(this._uri, line);
@@ -238,7 +262,7 @@ export class CurrentLineController extends Disposable {
             const pending = this._updateBlameDebounced.pending!();
 
             // Make sure we are still blameable after the await (and there aren't more updates pending)
-            if (this._blameable && !pending) {
+            if (this.canBlame && !pending) {
                 commitLine = blameLine === undefined ? undefined : blameLine.line;
                 commit = blameLine === undefined ? undefined : blameLine.commit;
             }
@@ -288,7 +312,7 @@ export class CurrentLineController extends Disposable {
         this.clearAnnotations(this._editor);
 
         this._blameable = this.isEditorBlameable(editor);
-        if (!this._blameable || editor === undefined) {
+        if (!this.canBlame || editor === undefined) {
             this.clear(editor!);
             this._editor = undefined;
 
@@ -305,7 +329,7 @@ export class CurrentLineController extends Disposable {
         }
 
         const state = this.getLineAnnotationState();
-        if (state.enabled && this._blameable) {
+        if (state.enabled && this.canBlame) {
             const cfg = this._config.annotations.line;
             this.registerHoverProviders(state.annotationType === LineAnnotationType.Trailing ? cfg.trailing.hover : cfg.hover);
         }
@@ -319,6 +343,10 @@ export class CurrentLineController extends Disposable {
     async show(commit: GitCommit, blameLine: GitCommitLine, editor: TextEditor, line: number) {
         // I have no idea why I need this protection -- but it happens
         if (editor.document === undefined) return;
+
+        if (editor.document.isDirty) {
+            this.gitContextTracker.setTriggerOnNextChange(editor.document);
+        }
 
         this.updateStatusBar(commit);
         this.updateTrailingAnnotation(commit, blameLine, editor, line);

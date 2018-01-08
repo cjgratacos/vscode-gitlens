@@ -1,9 +1,9 @@
 'use strict';
-import { Functions, IDeferrable } from '../system';
-import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextDocumentChangeEvent, TextEditor, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
-import { TextDocumentComparer } from '../comparers';
+import { Functions } from '../system';
+import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextEditor, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
 import { configuration } from '../configuration';
-import { CommandContext, isTextEditor, RangeEndOfLineIndex, setCommandContext } from '../constants';
+import { CommandContext, isTextEditor, setCommandContext } from '../constants';
+import { DocumentDirtyStateChangeEvent } from '../DocumentTracker';
 import { GitChangeEvent, GitChangeReason, GitService, GitUri, Repository, RepositoryChangeEvent } from '../gitService';
 import { Logger } from '../logger';
 
@@ -57,23 +57,23 @@ export class GitContextTracker extends Disposable {
         return this._onDidChangeBlameability.event;
     }
 
-    private _onDidChangeDirtyState = new EventEmitter<DirtyStateChangeEvent>();
-    get onDidChangeDirtyState(): Event<DirtyStateChangeEvent> {
-        return this._onDidChangeDirtyState.event;
+    // private _onDidChangeDirtyState = new EventEmitter<DirtyStateChangeEvent>();
+    get onDidChangeDirtyState(): Event<DocumentDirtyStateChangeEvent> {
+        return this.git._documentTracker.onDidDirtyStateChange; // _onDidChangeDirtyState.event;
     }
 
-    private _onDidChangeLineDirtyState = new EventEmitter<LineDirtyStateChangeEvent>();
-    get onDidChangeLineDirtyState(): Event<LineDirtyStateChangeEvent> {
-        return this._onDidChangeLineDirtyState.event;
-    }
+    // private _onDidChangeLineDirtyState = new EventEmitter<LineDirtyStateChangeEvent>();
+    // get onDidChangeLineDirtyState(): Event<LineDirtyStateChangeEvent> {
+    //     return this._onDidChangeLineDirtyState.event;
+    // }
 
     private readonly _context: Context = { state: { dirty: false } };
     private readonly _disposable: Disposable;
     private _listenersDisposable: Disposable | undefined;
-    private _fireDirtyStateChangedDebounced: (() => void) & IDeferrable;
+    // private _fireDirtyStateChangedDebounced: (() => void) & IDeferrable;
 
-    private _checkLineDirtyStateChangedDebounced: (() => void) & IDeferrable;
-    private _fireLineDirtyStateChangedDebounced: (() => void) & IDeferrable;
+    // private _checkLineDirtyStateChangedDebounced: (() => void) & IDeferrable;
+    // private _fireLineDirtyStateChangedDebounced: (() => void) & IDeferrable;
 
     private _insiders = false;
 
@@ -82,10 +82,10 @@ export class GitContextTracker extends Disposable {
     ) {
         super(() => this.dispose());
 
-        this._fireDirtyStateChangedDebounced = Functions.debounce(this.fireDirtyStateChanged, 1000);
+        // this._fireDirtyStateChangedDebounced = Functions.debounce(this.fireDirtyStateChanged, 1000);
 
-        this._checkLineDirtyStateChangedDebounced = Functions.debounce(this.checkLineDirtyStateChanged, 1000);
-        this._fireLineDirtyStateChangedDebounced = Functions.debounce(this.fireLineDirtyStateChanged, 1000);
+        // this._checkLineDirtyStateChangedDebounced = Functions.debounce(this.checkLineDirtyStateChanged, 1000);
+        // this._fireLineDirtyStateChangedDebounced = Functions.debounce(this.fireLineDirtyStateChanged, 1000);
 
         this._disposable = Disposable.from(
             workspace.onDidChangeConfiguration(this.onConfigurationChanged, this)
@@ -96,6 +96,13 @@ export class GitContextTracker extends Disposable {
     dispose() {
         this._listenersDisposable && this._listenersDisposable.dispose();
         this._disposable && this._disposable.dispose();
+    }
+
+    setTriggerOnNextChange(document: TextDocument) {
+        const doc = this.git._documentTracker.get(document);
+        if (doc === undefined) return;
+
+        doc.triggerOnNextChange();
     }
 
     private _lineTrackingEnabled: boolean = false;
@@ -135,8 +142,9 @@ export class GitContextTracker extends Disposable {
             if (enabled) {
                 this._listenersDisposable = Disposable.from(
                     window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
-                    workspace.onDidChangeTextDocument(this.onTextDocumentChanged, this),
+                    // workspace.onDidChangeTextDocument(this.onTextDocumentChanged, this),
                     window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
+                    // this.git._documentTracker.onDidDirtyStateChange(this.onTextDocumentDirtyStateChanged, this),
                     this.git.onDidBlameFail(this.onBlameFailed, this),
                     this.git.onDidChange(this.onGitChanged, this)
                 );
@@ -148,6 +156,53 @@ export class GitContextTracker extends Disposable {
             }
         }
     }
+
+    // private onTextDocumentDirtyStateChanged(e: DocumentDirtyStateChangeEvent) {
+    //     this._context.state.dirty = e.dirty;
+    //     this.fireDirtyStateChanged();
+    // //     if (this._context.editor === undefined || !TextDocumentComparer.equals(this._context.editor.document, e.document)) return;
+
+    // //     const dirty = e.document.isDirty;
+    // //     const line = (this._context.editor && this._context.editor.selection.active.line) || -1;
+
+    // //     let changed = false;
+    // //     if (this._context.state.dirty !== dirty || this._context.state.line !== line) {
+    // //         changed = true;
+
+    // //         this._context.state.dirty = dirty;
+    // //         if (this._context.state.line !== line) {
+    // //             this._context.state.lineDirty = undefined;
+    // //         }
+    // //         this._context.state.line = line;
+
+    // //         if (dirty) {
+    // //             this._fireDirtyStateChangedDebounced.cancel();
+    // //             setImmediate(() => this.fireDirtyStateChanged());
+    // //         }
+    // //         else {
+    // //             this._fireDirtyStateChangedDebounced();
+    // //         }
+    // //     }
+
+    // //     if (!this._lineTrackingEnabled || !this._insiders) return;
+
+    // //     // If the file dirty state hasn't changed, check if the line has
+    // //     if (!changed) {
+    // //         this._checkLineDirtyStateChangedDebounced();
+
+    // //         return;
+    // //     }
+
+    // //     this._context.state.lineDirty = dirty;
+
+    // //     if (dirty) {
+    // //         this._fireLineDirtyStateChangedDebounced.cancel();
+    // //         setImmediate(() => this.fireLineDirtyStateChanged());
+    // //     }
+    // //     else {
+    // //         this._fireLineDirtyStateChangedDebounced();
+    // //     }
+    // }
 
     private onActiveTextEditorChanged(editor: TextEditor | undefined) {
         if (editor === this._context.editor) return;
@@ -179,88 +234,88 @@ export class GitContextTracker extends Disposable {
         this.updateRemotes();
     }
 
-    private onTextDocumentChanged(e: TextDocumentChangeEvent) {
-        if (this._context.editor === undefined || !TextDocumentComparer.equals(this._context.editor.document, e.document)) return;
+    // private onTextDocumentChanged(e: TextDocumentChangeEvent) {
+    //     if (this._context.editor === undefined || !TextDocumentComparer.equals(this._context.editor.document, e.document)) return;
 
-        const dirty = e.document.isDirty;
-        const line = (this._context.editor && this._context.editor.selection.active.line) || -1;
+    //     const dirty = e.document.isDirty;
+    //     const line = (this._context.editor && this._context.editor.selection.active.line) || -1;
 
-        let changed = false;
-        if (this._context.state.dirty !== dirty || this._context.state.line !== line) {
-            changed = true;
+    //     let changed = false;
+    //     if (this._context.state.dirty !== dirty || this._context.state.line !== line) {
+    //         changed = true;
 
-            this._context.state.dirty = dirty;
-            if (this._context.state.line !== line) {
-                this._context.state.lineDirty = undefined;
-            }
-            this._context.state.line = line;
+    //         this._context.state.dirty = dirty;
+    //         if (this._context.state.line !== line) {
+    //             this._context.state.lineDirty = undefined;
+    //         }
+    //         this._context.state.line = line;
 
-            if (dirty) {
-                this._fireDirtyStateChangedDebounced.cancel();
-                setImmediate(() => this.fireDirtyStateChanged());
-            }
-            else {
-                this._fireDirtyStateChangedDebounced();
-            }
-        }
+    //         if (dirty) {
+    //             this._fireDirtyStateChangedDebounced.cancel();
+    //             setImmediate(() => this.fireDirtyStateChanged());
+    //         }
+    //         else {
+    //             this._fireDirtyStateChangedDebounced();
+    //         }
+    //     }
 
-        if (!this._lineTrackingEnabled || !this._insiders) return;
+    //     if (!this._lineTrackingEnabled || !this._insiders) return;
 
-        // If the file dirty state hasn't changed, check if the line has
-        if (!changed) {
-            this._checkLineDirtyStateChangedDebounced();
+    //     // If the file dirty state hasn't changed, check if the line has
+    //     if (!changed) {
+    //         this._checkLineDirtyStateChangedDebounced();
 
-            return;
-        }
+    //         return;
+    //     }
 
-        this._context.state.lineDirty = dirty;
+    //     this._context.state.lineDirty = dirty;
 
-        if (dirty) {
-            this._fireLineDirtyStateChangedDebounced.cancel();
-            setImmediate(() => this.fireLineDirtyStateChanged());
-        }
-        else {
-            this._fireLineDirtyStateChangedDebounced();
-        }
-    }
+    //     if (dirty) {
+    //         this._fireLineDirtyStateChangedDebounced.cancel();
+    //         setImmediate(() => this.fireLineDirtyStateChanged());
+    //     }
+    //     else {
+    //         this._fireLineDirtyStateChangedDebounced();
+    //     }
+    // }
 
-    private async checkLineDirtyStateChanged() {
-        const line = this._context.state.line;
-        if (this._context.editor === undefined || line === undefined || line < 0) return;
+    // private async checkLineDirtyStateChanged() {
+    //     const line = this._context.state.line;
+    //     if (this._context.editor === undefined || line === undefined || line < 0) return;
 
-        // Since we only care about this one line, just pass empty lines to align the contents for blaming (and also skip using the cache)
-        const contents = `${' \n'.repeat(line)}${this._context.editor.document.getText(new Range(line, 0, line, RangeEndOfLineIndex))}\n`;
-        const blameLine = await this.git.getBlameForLineContents(this._context.uri!, line, contents, { skipCache: true });
-        const lineDirty = blameLine !== undefined && blameLine.commit.isUncommitted;
+    //     // Since we only care about this one line, just pass empty lines to align the contents for blaming (and also skip using the cache)
+    //     const contents = `${' \n'.repeat(line)}${this._context.editor.document.getText(new Range(line, 0, line, RangeEndOfLineIndex))}\n`;
+    //     const blameLine = await this.git.getBlameForLineContents(this._context.uri!, line, contents, { skipCache: true });
+    //     const lineDirty = blameLine !== undefined && blameLine.commit.isUncommitted;
 
-        if (this._context.state.lineDirty !== lineDirty) {
-            this._context.state.lineDirty = lineDirty;
+    //     if (this._context.state.lineDirty !== lineDirty) {
+    //         this._context.state.lineDirty = lineDirty;
 
-            this._fireLineDirtyStateChangedDebounced.cancel();
-            setImmediate(() => this.fireLineDirtyStateChanged());
-        }
-    }
+    //         this._fireLineDirtyStateChangedDebounced.cancel();
+    //         setImmediate(() => this.fireLineDirtyStateChanged());
+    //     }
+    // }
 
-    private fireDirtyStateChanged() {
-        if (this._insiders) {
-            this._onDidChangeDirtyState.fire({
-                editor: this._context.editor,
-                dirty: this._context.state.dirty
-            } as DirtyStateChangeEvent);
-        }
-        else {
-            this.updateBlameability(BlameabilityChangeReason.DocumentChanged);
-        }
-    }
+    // private fireDirtyStateChanged() {
+    //     if (this._insiders) {
+    //         this._onDidChangeDirtyState.fire({
+    //             editor: this._context.editor,
+    //             dirty: this._context.state.dirty
+    //         } as DirtyStateChangeEvent);
+    //     }
+    //     else {
+    //         this.updateBlameability(BlameabilityChangeReason.DocumentChanged);
+    //     }
+    // }
 
-    private fireLineDirtyStateChanged() {
-        this._onDidChangeLineDirtyState.fire({
-            editor: this._context.editor,
-            dirty: this._context.state.dirty,
-            line: this._context.state.line,
-            lineDirty: this._context.state.lineDirty
-        } as LineDirtyStateChangeEvent);
-    }
+    // private fireLineDirtyStateChanged() {
+    //     this._onDidChangeLineDirtyState.fire({
+    //         editor: this._context.editor,
+    //         dirty: this._context.state.dirty,
+    //         line: this._context.state.line,
+    //         lineDirty: this._context.state.lineDirty
+    //     } as LineDirtyStateChangeEvent);
+    // }
 
     private onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent) {
         if (this._context.state.line === e.selections[0].active.line) return;
@@ -271,7 +326,7 @@ export class GitContextTracker extends Disposable {
 
     private async updateContext(reason: BlameabilityChangeReason, editor: TextEditor | undefined, force: boolean = false) {
         try {
-            let dirty = false;
+            // let dirty = false;
             let revision = false;
             let tracked = false;
             if (force || this._context.editor !== editor) {
@@ -291,7 +346,7 @@ export class GitContextTracker extends Disposable {
                         this._context.repoDisposable = repo.onDidChange(this.onRepoChanged, this);
                     }
 
-                    dirty = editor.document.isDirty;
+                    // dirty = editor.document.isDirty;
                     revision = !!this._context.uri.sha;
                     tracked = await this.git.isTracked(this._context.uri);
                 }
@@ -316,12 +371,13 @@ export class GitContextTracker extends Disposable {
                 setCommandContext(CommandContext.ActiveFileIsTracked, tracked);
             }
 
-            if (this._context.state.dirty !== dirty) {
-                this._context.state.dirty = dirty;
-                if (this._insiders) {
-                    this._fireDirtyStateChangedDebounced();
-                }
-            }
+            // if (this._context.state.dirty !== dirty) {
+            //     this._context.state.dirty = dirty;
+            //     if (this._insiders) {
+            //         this.fireDirtyStateChanged();
+            //         // this._fireDirtyStateChangedDebounced();
+            //     }
+            // }
 
             this.updateBlameability(reason, undefined, force);
             this.updateRemotes();

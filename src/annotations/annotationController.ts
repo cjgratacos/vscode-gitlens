@@ -2,10 +2,10 @@
 import { Functions, Iterables } from '../system';
 import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOptions, Disposable, Event, EventEmitter, ExtensionContext, OverviewRulerLane, Progress, ProgressLocation, TextDocument, TextEditor, TextEditorDecorationType, TextEditorViewColumnChangeEvent, ThemeColor, window, workspace } from 'vscode';
 import { AnnotationProviderBase, TextEditorCorrelationKey } from './annotationProvider';
-import { TextDocumentComparer } from '../comparers';
 import { configuration, IConfig, LineHighlightLocations } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri, LineDirtyStateChangeEvent } from '../gitService';
+import { DocumentDirtyStateChangeEvent } from '../DocumentTracker';
+import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri } from '../gitService';
 import { GutterBlameAnnotationProvider } from './gutterBlameAnnotationProvider';
 import { HeatmapBlameAnnotationProvider } from './heatmapBlameAnnotationProvider';
 import { HoverBlameAnnotationProvider } from './hoverBlameAnnotationProvider';
@@ -208,15 +208,28 @@ export class AnnotationController extends Disposable {
         this.clear(e.editor, AnnotationClearReason.BlameabilityChanged);
     }
 
-    private onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
-        if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
+    // private onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
+    //     if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
 
-        Logger.log('AnnotationController.onLineDirtyStateChanged', e.dirty);
+    //     Logger.log('AnnotationController.onLineDirtyStateChanged', e.dirty);
 
-        for (const p of this._annotationProviders.values()) {
-            if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
+    //     for (const p of this._annotationProviders.values()) {
+    //         if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
 
-            p.reset();
+    //         p.reset();
+    //     }
+    // }
+
+    private onDirtyStateChanged(e: DocumentDirtyStateChangeEvent) {
+        // if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
+
+        Logger.log('AnnotationController.onDirtyStateChanged', e.dirty);
+
+        for (const [key, p] of this._annotationProviders) {
+            if (p.document !== e.document) continue;
+            // if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
+
+            this.clearCore(key, AnnotationClearReason.DocumentChanged);
         }
     }
 
@@ -224,7 +237,8 @@ export class AnnotationController extends Disposable {
         if (!this.git.isTrackable(document.uri)) return;
 
         for (const [key, p] of this._annotationProviders) {
-            if (!TextDocumentComparer.equals(p.document, document)) continue;
+            if (p.document !== document) continue;
+            // if (!TextDocumentComparer.equals(p.document, document)) continue;
 
             this.clearCore(key, AnnotationClearReason.DocumentClosed);
         }
@@ -401,7 +415,8 @@ export class AnnotationController extends Disposable {
                 window.onDidChangeVisibleTextEditors(this.onVisibleTextEditorsChanged, this),
                 workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this),
                 this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
-                this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
+                this.gitContextTracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
+                // this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
             );
         }
 

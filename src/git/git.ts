@@ -37,7 +37,7 @@ const GitWarnings = [
     /ambiguous argument '.*?': unknown revision or path not in the working tree/
 ];
 
-async function gitCommand(options: CommandOptions, ...args: any[]): Promise<string> {
+async function gitCommand(options: CommandOptions & { readonly correlationKey?: string }, ...args: any[]): Promise<string> {
     try {
         return await gitCommandCore(options, ...args);
     }
@@ -49,26 +49,28 @@ async function gitCommand(options: CommandOptions, ...args: any[]): Promise<stri
 // A map of running git commands -- avoids running duplicate overlaping commands
 const pendingCommands: Map<string, Promise<string>> = new Map();
 
-async function gitCommandCore(options: CommandOptions, ...args: any[]): Promise<string> {
+async function gitCommandCore(options: CommandOptions & { readonly correlationKey?: string }, ...args: any[]): Promise<string> {
     // Fixes https://github.com/eamodio/vscode-gitlens/issues/73 & https://github.com/eamodio/vscode-gitlens/issues/161
     // See https://stackoverflow.com/questions/4144417/how-to-handle-asian-characters-in-file-names-in-git-on-os-x
     args.splice(0, 0, '-c', 'core.quotepath=false', '-c', 'color.ui=false');
 
+    const { correlationKey, ...opts } = options;
+
     const encoding = options.encoding || 'utf8';
-    const opts = {
-        ...options,
+    const runOpts = {
+        ...opts,
         encoding: encoding === 'utf8' ? 'utf8' : 'binary',
         // Adds GCM environment variables to avoid any possible credential issues -- from https://github.com/Microsoft/vscode/issues/26573#issuecomment-338686581
         // Shouldn't *really* be needed but better safe than sorry
         env: { ...(options.env || process.env), GCM_INTERACTIVE: 'NEVER', GCM_PRESERVE_CREDS: 'TRUE' }
     } as CommandOptions;
 
-    const command = `(${opts.cwd}): git ${args.join(' ')}`;
+    const command = `(${runOpts.cwd}${correlationKey !== undefined ? correlationKey : ''}): git ${args.join(' ')}`;
 
     let promise = pendingCommands.get(command);
     if (promise === undefined) {
         Logger.log(`Running${command}`);
-        promise = runCommand(git.path, args, opts);
+        promise = runCommand(git.path, args, runOpts);
 
         pendingCommands.set(command, promise);
     }
@@ -257,7 +259,7 @@ export class Git {
         return gitCommand({ cwd: root, stdin: stdin }, ...params, '--', file);
     }
 
-    static async blame_contents(repoPath: string | undefined, fileName: string, contents: string, options: { ignoreWhitespace?: boolean, startLine?: number, endLine?: number } = {}) {
+    static async blame_contents(repoPath: string | undefined, fileName: string, contents: string, options: { correlationKey?: string, ignoreWhitespace?: boolean, startLine?: number, endLine?: number } = {}) {
         const [file, root] = Git.splitPath(fileName, repoPath);
 
         const params = [...defaultBlameParams];
@@ -272,7 +274,7 @@ export class Git {
         // Pipe the blame contents to stdin
         params.push('--contents', '-');
 
-        return gitCommand({ cwd: root, stdin: contents }, ...params, '--', file);
+        return gitCommand({ cwd: root, stdin: contents, correlationKey: options.correlationKey }, ...params, '--', file);
     }
 
     static branch(repoPath: string, options: { all: boolean } = { all: false }) {
