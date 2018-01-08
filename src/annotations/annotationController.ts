@@ -4,7 +4,7 @@ import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOpti
 import { AnnotationProviderBase, TextEditorCorrelationKey } from './annotationProvider';
 import { configuration, IConfig, LineHighlightLocations } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { DocumentDirtyStateChangeEvent } from '../DocumentTracker';
+import { DocumentDirtyStateChangeEvent } from '../documentTracker';
 import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri } from '../gitService';
 import { GutterBlameAnnotationProvider } from './gutterBlameAnnotationProvider';
 import { HeatmapBlameAnnotationProvider } from './heatmapBlameAnnotationProvider';

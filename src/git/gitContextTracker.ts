@@ -1,9 +1,9 @@
 'use strict';
 import { Functions } from '../system';
-import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextEditor, TextEditorSelectionChangeEvent, window, workspace } from 'vscode';
+import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextEditor, window, workspace } from 'vscode';
 import { configuration } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { DocumentDirtyStateChangeEvent } from '../DocumentTracker';
+import { DocumentDirtyStateChangeEvent } from '../documentTracker';
 import { GitChangeEvent, GitChangeReason, GitService, GitUri, Repository, RepositoryChangeEvent } from '../gitService';
 import { Logger } from '../logger';
 
@@ -22,16 +22,16 @@ export interface BlameabilityChangeEvent {
     reason: BlameabilityChangeReason;
 }
 
-export interface DirtyStateChangeEvent {
-    editor: TextEditor | undefined;
+// export interface DirtyStateChangeEvent {
+//     editor: TextEditor | undefined;
 
-    dirty: boolean;
-}
+//     dirty: boolean;
+// }
 
-export interface LineDirtyStateChangeEvent extends DirtyStateChangeEvent {
-    line: number;
-    lineDirty: boolean;
-}
+// export interface LineDirtyStateChangeEvent extends DirtyStateChangeEvent {
+//     line: number;
+//     lineDirty: boolean;
+// }
 
 interface Context {
     editor?: TextEditor;
@@ -44,8 +44,8 @@ interface Context {
 interface ContextState {
     blameable?: boolean;
     dirty: boolean;
-    line?: number;
-    lineDirty?: boolean;
+    // line?: number;
+    // lineDirty?: boolean;
     revision?: boolean;
     tracked?: boolean;
 }
@@ -112,8 +112,8 @@ export class GitContextTracker extends Disposable {
 
         // If we are changing line tracking, reset the current line info, so we will refresh
         if (this._lineTrackingEnabled !== enabled) {
-            this._context.state.line = undefined;
-            this._context.state.lineDirty = undefined;
+            // this._context.state.line = undefined;
+            // this._context.state.lineDirty = undefined;
         }
         this._lineTrackingEnabled = enabled;
     }
@@ -143,7 +143,7 @@ export class GitContextTracker extends Disposable {
                 this._listenersDisposable = Disposable.from(
                     window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
                     // workspace.onDidChangeTextDocument(this.onTextDocumentChanged, this),
-                    window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
+                    // window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
                     // this.git._documentTracker.onDidDirtyStateChange(this.onTextDocumentDirtyStateChanged, this),
                     this.git.onDidBlameFail(this.onBlameFailed, this),
                     this.git.onDidChange(this.onGitChanged, this)
@@ -208,13 +208,30 @@ export class GitContextTracker extends Disposable {
         if (editor === this._context.editor) return;
         if (editor !== undefined && !isTextEditor(editor)) return;
 
+        // if (editor === undefined) {
+        //     setCommandContext(CommandContext.ActiveIsRevision, false);
+        //     setCommandContext(CommandContext.ActiveFileIsTracked, false);
+        //     setCommandContext(CommandContext.ActiveIsBlameable, false);
+        //     setCommandContext(CommandContext.ActiveHasRemote, false);
+
+        //     return;
+        // }
+
+        // const doc = this.git._documentTracker.get(editor.document);
+        // if (doc !== undefined) {
+        //     doc.activate();
+        // }
+        // else {
+        //     debugger;
+        // }
+
         // Logger.log('GitContextTracker.onActiveTextEditorChanged', editor && editor.document.uri.fsPath);
 
-        // Reset the current line info, so we will refresh
-        this._context.state.line = undefined;
-        this._context.state.lineDirty = undefined;
+        // // Reset the current line info, so we will refresh
+        // this._context.state.line = undefined;
+        // this._context.state.lineDirty = undefined;
 
-        this.updateContext(BlameabilityChangeReason.EditorChanged, editor, true);
+        // this.updateContext(BlameabilityChangeReason.EditorChanged, editor, true);
     }
 
     private onBlameFailed(key: string) {
@@ -317,12 +334,12 @@ export class GitContextTracker extends Disposable {
     //     } as LineDirtyStateChangeEvent);
     // }
 
-    private onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent) {
-        if (this._context.state.line === e.selections[0].active.line) return;
+    // private onTextEditorSelectionChanged(e: TextEditorSelectionChangeEvent) {
+    //     if (this._context.state.line === e.selections[0].active.line) return;
 
-        this._context.state.line = undefined;
-        this._context.state.lineDirty = false;
-    }
+    //     this._context.state.line = undefined;
+    //     this._context.state.lineDirty = false;
+    // }
 
     private async updateContext(reason: BlameabilityChangeReason, editor: TextEditor | undefined, force: boolean = false) {
         try {

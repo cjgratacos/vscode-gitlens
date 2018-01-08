@@ -1,25 +1,138 @@
 'use strict';
 import { Functions, IDeferrable } from './system';
-import { Disposable, Event, EventEmitter, TextDocument, TextDocumentChangeEvent, TextEditor, Uri, window, workspace } from 'vscode';
-import { Git } from './git/git';
+import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextDocumentChangeEvent, TextEditor, Uri, window, workspace } from 'vscode';
+import { configuration } from './configuration';
+import { CommandContext, isTextEditor, setCommandContext } from './constants';
+import { GitService, GitUri, Repository, RepositoryChange, RepositoryChangeEvent } from './gitService';
 import { Logger } from './logger';
 
 export interface DocumentState {
     hasErrors: boolean;
 }
 
-export class TrackedDocument<T extends DocumentState> {
+export class TrackedDocument<T extends DocumentState> extends Disposable {
 
     state: T | undefined;
-    private _shouldTriggerOnNextChange: boolean = false;
+
+    private _disposable: Disposable;
+    private _disposed: boolean = false;
+    private _repo: (Repository | undefined) | Promise<Repository | undefined>;
+    private _uri: GitUri | undefined;
 
     constructor(
+        public readonly document: TextDocument,
         public readonly key: string,
         public dirty: boolean
-    ) { }
+    ) {
+        super(() => this.dispose());
 
+        this._repo = this.initialize(document.uri);
+    }
+
+    dispose() {
+        this._disposed = true;
+        this._disposable && this._disposable.dispose();
+    }
+
+    private async initialize(uri: Uri) {
+        this._uri = await GitUri.fromUri(uri, GitService.instance);
+        if (this._disposed) return;
+
+        const repo = await GitService.instance.getRepository(this._uri);
+        if (this._disposed) return;
+
+        this._repo = repo;
+
+        if (repo !== undefined) {
+            this._disposable = repo.onDidChange(this.onRepositoryChanged, this);
+        }
+
+        this.update();
+
+        return repo;
+    }
+
+    private onRepositoryChanged(e: RepositoryChangeEvent) {
+        if (!e.changed(RepositoryChange.Repository)) return;
+
+        // Reset any cached state
+        this.clear();
+        this.update();
+    }
+
+    clear() {
+        this.state = undefined;
+    }
+
+    private async update() {
+        if (this._disposed || this._uri === undefined) {
+            this._hasRemotes = false;
+            this._isRevision = false;
+            this._isTracked = false;
+
+            return;
+        }
+
+        const editor = window.activeTextEditor;
+        const isActive = editor !== undefined && editor.document === this.document;
+
+        this._isRevision = !!this._uri.sha;
+        if (isActive) {
+            setCommandContext(CommandContext.ActiveIsRevision, this._isRevision);
+        }
+
+        this._isTracked = await GitService.instance.isTracked(this._uri);
+        if (isActive) {
+            setCommandContext(CommandContext.ActiveFileIsTracked, this._isTracked);
+            setCommandContext(CommandContext.ActiveIsBlameable, this._isTracked);
+        }
+
+        let repo = undefined;
+        if (this._isTracked) {
+            repo = await this._repo;
+        }
+
+        if (repo !== undefined) {
+            this._hasRemotes = await repo.hasRemote();
+        }
+        else {
+            this._hasRemotes = false;
+        }
+
+        if (isActive) {
+            setCommandContext(CommandContext.ActiveHasRemote, this._hasRemotes);
+        }
+    }
+
+    private _hasRemotes: boolean = false;
+    get hasRemotes() {
+        return this._hasRemotes;
+    }
+
+    private _isRevision: boolean = false;
+    get isRevision() {
+        return this._isRevision;
+    }
+
+    private _isTracked: boolean = false;
+    get isTracked() {
+        return this._isTracked;
+    }
+
+    private _shouldTriggerOnNextChange: boolean = false;
     get shouldTriggerOnNextChange() {
         return this._shouldTriggerOnNextChange;
+    }
+
+    activate() {
+        setCommandContext(CommandContext.ActiveIsRevision, this._isRevision);
+        setCommandContext(CommandContext.ActiveFileIsTracked, this._isTracked);
+        setCommandContext(CommandContext.ActiveIsBlameable, this._isTracked);
+        setCommandContext(CommandContext.ActiveHasRemote, this._hasRemotes);
+    }
+
+    getRepository() {
+        return this._repo;
     }
 
     triggerOnNextChange() {
@@ -39,7 +152,7 @@ export class DocumentDirtyStateChangeEvent {
     ) { }
 }
 
-export class DocumentTracker<T extends DocumentState> extends Disposable {
+export class DocumentStateTracker<T extends DocumentState> extends Disposable {
 
     private _onDidDirtyStateChange = new EventEmitter<DocumentDirtyStateChangeEvent>();
     get onDidDirtyStateChange(): Event<DocumentDirtyStateChangeEvent> {
@@ -51,11 +164,6 @@ export class DocumentTracker<T extends DocumentState> extends Disposable {
 
     constructor() {
         super(() => this.dispose());
-
-        this._disposable = Disposable.from(
-            workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
-            workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this)
-        );
     }
 
     dispose() {
@@ -68,6 +176,8 @@ export class DocumentTracker<T extends DocumentState> extends Disposable {
         }
 
         this._disposable = Disposable.from(
+            configuration.onDidChange(this.onConfigurationChanged, this),
+            window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 0), this),
             workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
             workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this)
         );
@@ -79,7 +189,7 @@ export class DocumentTracker<T extends DocumentState> extends Disposable {
             this._disposable = undefined;
         }
 
-        this._documentMap.clear();
+        this.clear();
     }
 
     async add(fileName: string): Promise<TrackedDocument<T>>;
@@ -100,23 +210,15 @@ export class DocumentTracker<T extends DocumentState> extends Disposable {
         const key = this.toKey(document.uri);
 
         // Always start out false, so we will fire the event if needed
-        const entry = new TrackedDocument<T>(key, false);
-        this._documentMap.set(document, entry);
-        this._documentMap.set(key, entry);
+        const doc = new TrackedDocument<T>(document, key, false);
+        this._documentMap.set(document, doc);
+        this._documentMap.set(key, doc);
 
-        return entry;
+        return doc;
     }
 
-    clear(stateOnly: boolean = false) {
-        if (!stateOnly) {
-            this._documentMap.clear();
-
-            return;
-        }
-
-        for (const d of this._documentMap.values()) {
-            d.state = undefined;
-        }
+    clear() {
+        this._documentMap.clear();
     }
 
     get(fileName: string): TrackedDocument<T> | undefined;
@@ -133,7 +235,41 @@ export class DocumentTracker<T extends DocumentState> extends Disposable {
     private toKey(uri: Uri): string;
     private toKey(fileNameOrUri: string | Uri): string;
     private toKey(fileNameOrUri: string | Uri): string {
-        return Git.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
+        return GitService.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
+    }
+
+    private onConfigurationChanged(e: ConfigurationChangeEvent) {
+        const initializing = configuration.initializing(e);
+
+        // Only rest the cached state if we aren't initializing
+        if (!initializing && configuration.changed(e, configuration.name('blame')('ignoreWhitespace').value, null)) {
+            for (const d of this._documentMap.values()) {
+                d.clear();
+            }
+        }
+    }
+
+    private onActiveTextEditorChanged(editor: TextEditor | undefined) {
+        if (editor !== undefined && !isTextEditor(editor)) return;
+
+        if (editor === undefined) {
+            setCommandContext(CommandContext.ActiveIsRevision, false);
+            setCommandContext(CommandContext.ActiveFileIsTracked, false);
+            setCommandContext(CommandContext.ActiveIsBlameable, false);
+            setCommandContext(CommandContext.ActiveHasRemote, false);
+
+            return;
+        }
+
+        const doc = this._documentMap.get(editor.document);
+        if (doc !== undefined) {
+            doc.activate();
+
+            return;
+        }
+
+        // No need to activate this, as it is implicit in initialization if active
+        this.addCore(editor.document);
     }
 
     private onTextDocumentChanged(e: TextDocumentChangeEvent) {

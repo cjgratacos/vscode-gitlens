@@ -3,7 +3,7 @@ import { Iterables, Objects, Strings, TernarySearchTree } from './system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextEditor, Uri, window, WindowState, workspace, WorkspaceFolder, WorkspaceFoldersChangeEvent } from 'vscode';
 import { configuration, IConfig, IRemotesConfig } from './configuration';
 import { CommandContext, DocumentSchemes, setCommandContext } from './constants';
-import { DocumentState, DocumentTracker } from './DocumentTracker';
+import { DocumentState, DocumentStateTracker } from './documentTracker';
 import { RemoteProviderFactory, RemoteProviderMap } from './git/remotes/factory';
 import { CommitFormatting, Git, GitAuthor, GitBlame, GitBlameCommit, GitBlameLine, GitBlameLines, GitBlameParser, GitBranch, GitBranchParser, GitCommit, GitCommitType, GitDiff, GitDiffChunkLine, GitDiffParser, GitDiffShortStat, GitLog, GitLogCommit, GitLogParser, GitRemote, GitRemoteParser, GitStash, GitStashParser, GitStatus, GitStatusFile, GitStatusParser, GitTag, GitTagParser, IGit, Repository } from './git/git';
 import { GitUri, IGitCommitInfo } from './git/gitUri';
@@ -74,7 +74,13 @@ export interface GitChangeEvent {
     reason: GitChangeReason;
 }
 
+let _instance: GitService;
+
 export class GitService extends Disposable {
+
+    static get instance(): GitService {
+        return _instance;
+    }
 
     static emptyPromise: Promise<GitBlame | GitDiff | GitLog | undefined> = Promise.resolve(undefined);
     static deletedSha = 'ffffffffffffffffffffffffffffffffffffffff';
@@ -94,7 +100,7 @@ export class GitService extends Disposable {
     }
 
     private readonly _disposable: Disposable;
-    readonly _documentTracker: DocumentTracker<DocumentGitState>;
+    readonly _documentTracker: DocumentStateTracker<DocumentGitState>;
     private readonly _repositoryTree: TernarySearchTree<Repository>;
     private _repositoriesLoadingPromise: Promise<void> | undefined;
     private _suspended: boolean = false;
@@ -104,7 +110,9 @@ export class GitService extends Disposable {
     constructor() {
         super(() => this.dispose());
 
-        this._documentTracker = new DocumentTracker();
+        _instance = this;
+
+        this._documentTracker = new DocumentStateTracker();
         this._repositoryTree = TernarySearchTree.forPaths();
         this._trackedCache = new Map();
         this._versionedUriCache = new Map();
@@ -133,8 +141,8 @@ export class GitService extends Disposable {
         return this.config.advanced.caching.enabled;
     }
 
-    private onAnyRepositoryChanged() {
-        this._documentTracker.clear(true);
+    private onAnyRepositoryChanged(repo: Repository) {
+        // this._documentTracker.clear(true);
         this._trackedCache.clear();
     }
 
@@ -163,12 +171,12 @@ export class GitService extends Disposable {
 
         this.config = cfg;
 
-        // Only count the change if we aren't initializing
-        if (!initializing && configuration.changed(e, configuration.name('blame')('ignoreWhitespace').value, null)) {
-            this._documentTracker.clear(true);
+        // // Only count the change if we aren't initializing
+        // if (!initializing && configuration.changed(e, configuration.name('blame')('ignoreWhitespace').value, null)) {
+        //     this._documentTracker.clear(true);
 
-            this.fireChange(GitChangeReason.GitCache);
-        }
+        //     this.fireChange(GitChangeReason.GitCache);
+        // }
     }
 
     private onWindowStateChanged(e: WindowState) {
@@ -223,7 +231,7 @@ export class GitService extends Disposable {
             }
         }
 
-        await setCommandContext(CommandContext.HasRepository, this._repositoryTree.any());
+        await this.updateContext(this._repositoryTree);
 
         if (!initializing) {
             // Defer the event trigger enough to let everything unwind
@@ -334,6 +342,21 @@ export class GitService extends Disposable {
                 resolve(repositories);
             });
         });
+    }
+
+    private async updateContext(repositoryTree: TernarySearchTree<Repository>) {
+        const hasRepository = repositoryTree.any();
+        await setCommandContext(CommandContext.HasRepository, hasRepository);
+
+        let hasRemotes = false;
+        if (hasRepository) {
+            for (const repo of repositoryTree.values()) {
+                hasRemotes = await repo.hasRemotes();
+                if (hasRemotes) break;
+            }
+        }
+
+        await setCommandContext(CommandContext.HasRemotes, hasRemotes);
     }
 
     private fireChange(reason: GitChangeReason) {
@@ -1198,7 +1221,7 @@ export class GitService extends Disposable {
 
             // Send a notification that the repositories changed
             setImmediate(async () => {
-                await setCommandContext(CommandContext.HasRepository, this._repositoryTree.any());
+                await this.updateContext(this._repositoryTree);
 
                 this.fireChange(GitChangeReason.Repositories);
             });

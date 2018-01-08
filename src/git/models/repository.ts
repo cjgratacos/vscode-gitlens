@@ -83,7 +83,7 @@ export class Repository extends Disposable {
         public readonly path: string,
         public readonly root: boolean,
         private readonly git: GitService,
-        private readonly onAnyRepositoryChanged: () => void,
+        private readonly onAnyRepositoryChanged: (repo: Repository) => void,
         suspended: boolean
     ) {
         super(() => this.dispose());
@@ -172,7 +172,7 @@ export class Repository extends Disposable {
             return;
         }
 
-        this.onAnyRepositoryChanged();
+        this.onAnyRepositoryChanged(this);
         this.fireChange(RepositoryChange.Repository);
     }
 

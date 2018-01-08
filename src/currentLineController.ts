@@ -7,7 +7,7 @@ import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
-import { DocumentDirtyStateChangeEvent } from './DocumentTracker';
+import { DocumentDirtyStateChangeEvent } from './documentTracker';
 import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
 import { Logger } from './logger';
 
