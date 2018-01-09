@@ -304,7 +304,7 @@ export class GitExplorer implements TreeDataProvider<ExplorerNode> {
             }
 
             if (workspaceEnabled) {
-                this._autoRefreshDisposable = this.git.onDidRepositoriesChange(this.onRepositoriesChanged, this);
+                this._autoRefreshDisposable = this.git.onDidChangeRepositories(this.onRepositoriesChanged, this);
                 this.context.subscriptions.push(this._autoRefreshDisposable);
             }
         }

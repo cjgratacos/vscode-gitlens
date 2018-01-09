@@ -1,7 +1,8 @@
 'use strict';
 import { Disposable, Event, EventEmitter, TextDocument, Uri, window } from 'vscode';
 import { CommandContext, setCommandContext } from './constants';
-import { GitService, GitUri, Repository, RepositoryChange, RepositoryChangeEvent } from './gitService';
+import { Container } from './container';
+import { GitUri, Repository, RepositoryChange, RepositoryChangeEvent } from './gitService';
 import { Logger } from './logger';
 
 export interface DocumentBlameStateChangeEvent {
@@ -41,10 +42,10 @@ export class TrackedDocument<T> extends Disposable {
     }
 
     private async initialize(uri: Uri) {
-        this._uri = await GitUri.fromUri(uri, GitService.instance);
+        this._uri = await GitUri.fromUri(uri, Container.git);
         if (this._disposed) return;
 
-        const repo = await GitService.instance.getRepository(this._uri);
+        const repo = await Container.git.getRepository(this._uri);
         if (this._disposed) return;
 
         this._repo = repo;
@@ -103,7 +104,7 @@ export class TrackedDocument<T> extends Disposable {
 
         const wasBlameable = options.forceBlameChange ? undefined : this.isBlameable;
 
-        this._isTracked = await GitService.instance.isTracked(this._uri);
+        this._isTracked = await Container.git.isTracked(this._uri);
         if (isActive) {
             const blameable = this.isBlameable;
 

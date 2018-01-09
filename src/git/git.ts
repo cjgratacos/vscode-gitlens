@@ -184,14 +184,6 @@ export class Git {
         return sha === undefined ? false : Git.uncommittedRegex.test(sha);
     }
 
-    static normalizePath(fileName: string) {
-        const normalized = fileName && fileName.replace(/\\/g, '/');
-        // if (normalized && normalized.includes('..')) {
-        //     debugger;
-        // }
-        return normalized;
-    }
-
     static shortenSha(sha: string) {
         if (Git.isStagedUncommitted(sha)) return 'index';
         if (Git.isUncommitted(sha)) return '';
@@ -207,8 +199,8 @@ export class Git {
 
     static splitPath(fileName: string, repoPath: string | undefined, extract: boolean = true): [string, string] {
         if (repoPath) {
-            fileName = this.normalizePath(fileName);
-            repoPath = this.normalizePath(repoPath);
+            fileName = Strings.normalizePath(fileName);
+            repoPath = Strings.normalizePath(repoPath);
 
             const normalizedRepoPath = (repoPath.endsWith('/') ? repoPath : `${repoPath}/`).toLowerCase();
             if (fileName.toLowerCase().startsWith(normalizedRepoPath)) {
@@ -216,8 +208,8 @@ export class Git {
             }
         }
         else {
-            repoPath = this.normalizePath(extract ? path.dirname(fileName) : repoPath!);
-            fileName = this.normalizePath(extract ? path.basename(fileName) : fileName);
+            repoPath = Strings.normalizePath(extract ? path.dirname(fileName) : repoPath!);
+            fileName = Strings.normalizePath(extract ? path.basename(fileName) : fileName);
         }
 
         return [ fileName, repoPath ];

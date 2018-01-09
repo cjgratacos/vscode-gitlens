@@ -6,6 +6,7 @@ import { CommandContext, DocumentSchemes, setCommandContext } from './constants'
 import { DocumentStateTracker, TrackedDocument } from './documentStateTracker';
 import { RemoteProviderFactory, RemoteProviderMap } from './git/remotes/factory';
 import { CommitFormatting, Git, GitAuthor, GitBlame, GitBlameCommit, GitBlameLine, GitBlameLines, GitBlameParser, GitBranch, GitBranchParser, GitCommit, GitCommitType, GitDiff, GitDiffChunkLine, GitDiffParser, GitDiffShortStat, GitLog, GitLogCommit, GitLogParser, GitRemote, GitRemoteParser, GitStash, GitStashParser, GitStatus, GitStatusFile, GitStatusParser, GitTag, GitTagParser, IGit, Repository } from './git/git';
+import { CachedBlame, CachedDiff, CachedLog, GitDocumentState } from './gitDocumentState';
 import { GitUri, IGitCommitInfo } from './git/gitUri';
 import { Logger } from './logger';
 import * as fs from 'fs';
@@ -18,32 +19,6 @@ export * from './git/formatters/status';
 export { getNameFromRemoteResource, RemoteProvider, RemoteResource, RemoteResourceType } from './git/remotes/provider';
 export { RemoteProviderFactory } from './git/remotes/factory';
 
-export class GitDocumentState {
-
-    private cache: Map<string, CachedBlame | CachedDiff | CachedLog> = new Map();
-
-    constructor(
-        public readonly key: string
-    ) { }
-
-    get<T extends CachedBlame | CachedDiff | CachedLog>(key: string): T | undefined {
-        return this.cache.get(key) as T;
-    }
-
-    set<T extends CachedBlame | CachedDiff | CachedLog>(key: string, value: T) {
-        this.cache.set(key, value);
-    }
-}
-
-interface CachedItem<T> {
-    item: Promise<T>;
-    errorMessage?: string;
-}
-
-interface CachedBlame extends CachedItem<GitBlame> { }
-interface CachedDiff extends CachedItem<GitDiff> { }
-interface CachedLog extends CachedItem<GitLog> { }
-
 export enum GitRepoSearchBy {
     Author = 'author',
     ChangedOccurrences = 'changed-occurrences',
@@ -53,13 +28,7 @@ export enum GitRepoSearchBy {
     Sha = 'sha'
 }
 
-let _instance: GitService;
-
 export class GitService extends Disposable {
-
-    static get instance(): GitService {
-        return _instance;
-    }
 
     static emptyPromise: Promise<GitBlame | GitDiff | GitLog | undefined> = Promise.resolve(undefined);
     static deletedSha = 'ffffffffffffffffffffffffffffffffffffffff';
@@ -68,9 +37,9 @@ export class GitService extends Disposable {
 
     config: IConfig;
 
-    private _onDidRepositoriesChange = new EventEmitter<void>();
-    get onDidRepositoriesChange(): Event<void> {
-        return this._onDidRepositoriesChange.event;
+    private _onDidChangeRepositories = new EventEmitter<void>();
+    get onDidChangeRepositories(): Event<void> {
+        return this._onDidChangeRepositories.event;
     }
 
     private readonly _disposable: Disposable;
@@ -81,8 +50,6 @@ export class GitService extends Disposable {
 
     constructor(private readonly _tracker: DocumentStateTracker<GitDocumentState>) {
         super(() => this.dispose());
-
-        _instance = this;
 
         this._repositoryTree = TernarySearchTree.forPaths();
         this._trackedCache = new Map();
@@ -116,11 +83,6 @@ export class GitService extends Disposable {
         const initializing = configuration.initializing(e);
 
         const cfg = configuration.get<IConfig>();
-
-        // LAZY: This should not be here
-        if (initializing || configuration.changed(e, configuration.name('keymap').value)) {
-            setCommandContext(CommandContext.KeyMap, cfg.keymap);
-        }
 
         if (initializing || configuration.changed(e, configuration.name('defaultDateStyle').value) ||
             configuration.changed(e, configuration.name('defaultDateFormat').value)) {
@@ -231,7 +193,7 @@ export class GitService extends Disposable {
         for (let p of paths) {
             p = path.dirname(p);
             // If we are the same as the root, skip it
-            if (Git.normalizePath(p) === rootPath) continue;
+            if (Strings.normalizePath(p) === rootPath) continue;
 
             const rp = await this.getRepoPathCore(p, true);
             if (rp === undefined) continue;
@@ -311,7 +273,7 @@ export class GitService extends Disposable {
     }
 
     private fireRepositoriesChanged() {
-        this._onDidRepositoriesChange.fire();
+        this._onDidChangeRepositories.fire();
     }
 
     checkoutFile(uri: GitUri, sha?: string) {
@@ -1313,7 +1275,7 @@ export class GitService extends Disposable {
         let fileName: string;
         if (typeof fileNameOrUri === 'string') {
             [fileName, repoPath] = Git.splitPath(fileNameOrUri, repoPath);
-            cacheKey = GitService.toStateKey(fileNameOrUri);
+            cacheKey = DocumentStateTracker.toStateKey(fileNameOrUri);
         }
         else {
             if (!this.isTrackable(fileNameOrUri)) return false;
@@ -1321,7 +1283,7 @@ export class GitService extends Disposable {
             fileName = fileNameOrUri.fsPath;
             repoPath = fileNameOrUri.repoPath;
             sha = fileNameOrUri.sha;
-            cacheKey = GitService.toStateKey(fileName);
+            cacheKey = DocumentStateTracker.toStateKey(fileName);
         }
 
         if (sha !== undefined) {
@@ -1396,7 +1358,7 @@ export class GitService extends Disposable {
 
         if (uri === undefined) return (await Git.revparse(repoPath, ref)) || ref;
 
-        return (await Git.log_resolve(repoPath, Git.normalizePath(path.relative(repoPath, uri.fsPath)), ref)) || ref;
+        return (await Git.log_resolve(repoPath, Strings.normalizePath(path.relative(repoPath, uri.fsPath)), ref)) || ref;
     }
 
     stopWatchingFileSystem() {
@@ -1460,10 +1422,6 @@ export class GitService extends Disposable {
         return Git.isUncommitted(sha);
     }
 
-    static normalizePath(fileName: string): string {
-        return Git.normalizePath(fileName);
-    }
-
     static shortenSha(sha: string | undefined) {
         if (sha === undefined) return undefined;
         if (sha === GitService.deletedSha) return '(deleted)';
@@ -1471,13 +1429,6 @@ export class GitService extends Disposable {
         return Git.isSha(sha) || Git.isStagedUncommitted(sha)
             ? Git.shortenSha(sha)
             : sha;
-    }
-
-    static toStateKey(fileName: string): string;
-    static toStateKey(uri: Uri): string;
-    static toStateKey(fileNameOrUri: string | Uri): string;
-    static toStateKey(fileNameOrUri: string | Uri): string {
-        return Git.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
     }
 
     static validateGitVersion(major: number, minor: number): boolean {

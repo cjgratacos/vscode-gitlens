@@ -4,8 +4,7 @@ import { DecorationOptions, Disposable, ExtensionContext, TextDocument, TextEdit
 import { FileAnnotationType } from '../annotations/annotationController';
 import { TextDocumentComparer } from '../comparers';
 import { configuration, IConfig } from '../configuration';
-import { TrackedDocument } from '../documentStateTracker';
-import { GitDocumentState } from '../gitService';
+import { GitDocumentState, TrackedDocument } from '../documentStateTracker';
 
 export type TextEditorCorrelationKey = string;
 

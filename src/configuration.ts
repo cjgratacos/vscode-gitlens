@@ -2,7 +2,7 @@
 import { Functions } from './system';
 import { ConfigurationChangeEvent, ConfigurationTarget, Event, EventEmitter, ExtensionContext, Uri, workspace } from 'vscode';
 import { FileAnnotationType } from './annotations/annotationController';
-import { ExtensionKey } from './constants';
+import { CommandContext, ExtensionKey, setCommandContext } from './constants';
 import { LineAnnotationType } from './currentLineController';
 import { GitExplorerView } from './views/gitExplorer';
 import { OutputLevel } from './logger';
@@ -525,6 +525,11 @@ export class Configuration {
 
     private onConfigurationChanged(e: ConfigurationChangeEvent) {
         if (!e.affectsConfiguration(ExtensionKey, null!)) return;
+
+        const section = configuration.name('keymap').value;
+        if (configuration.changed(e, section)) {
+            setCommandContext(CommandContext.KeyMap, this.get<KeyMap>(section));
+        }
 
         this._onDidChange.fire(e);
     }

@@ -7,8 +7,8 @@ import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
-import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentStateTracker } from './documentStateTracker';
-import { CommitFormatter, GitCommit, GitCommitLine, GitDocumentState, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
+import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentStateTracker, GitDocumentState } from './documentStateTracker';
+import { CommitFormatter, GitCommit, GitCommitLine, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
 import { Logger } from './logger';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -326,7 +326,12 @@ export class CurrentLineController extends Disposable {
         const maxLines = this._config.advanced.caching.maxLines;
         // If caching is on and the file is small enough -- kick off a blame for the whole file
         if (this._config.advanced.caching.enabled && (maxLines <= 0 || editor.document.lineCount <= maxLines)) {
-            this._git.getBlameForFile(this._uri);
+            if (editor.document.isDirty) {
+                this._git.getBlameForFileContents(this._uri, editor.document.getText());
+            }
+            else {
+                this._git.getBlameForFile(this._uri);
+            }
         }
 
         const state = this.getLineAnnotationState();

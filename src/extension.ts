@@ -7,16 +7,17 @@ import { CommandContext, ExtensionKey, GlobalState, QualifiedExtensionId, setCom
 import { CodeLensController } from './codeLensController';
 import { configureCommands } from './commands';
 import { CurrentLineController } from './currentLineController';
+import { DocumentStateTracker, GitDocumentState } from './documentStateTracker';
 import { ExplorerCommands } from './views/explorerCommands';
 import { GitContentProvider } from './gitContentProvider';
 import { GitExplorer } from './views/gitExplorer';
 import { GitRevisionCodeLensProvider } from './gitRevisionCodeLensProvider';
-import { GitDocumentState, GitService } from './gitService';
+import { GitService } from './gitService';
 import { Keyboard } from './keyboard';
 import { Logger } from './logger';
 import { Messages, SuppressedMessages } from './messages';
 import { ResultsExplorer } from './views/resultsExplorer';
-import { DocumentStateTracker } from './documentStateTracker';
+import { Container } from './container';
 // import { Telemetry } from './telemetry';
 
 // this method is called when your extension is activated
@@ -24,10 +25,20 @@ export async function activate(context: ExtensionContext) {
     const start = process.hrtime();
 
     Logger.configure(context);
-    Configuration.configure(context);
 
     const gitlens = extensions.getExtension(QualifiedExtensionId)!;
     const gitlensVersion = gitlens.packageJSON.version;
+
+    const enabled = workspace.getConfiguration('git', null!).get<boolean>('enabled', true);
+    setCommandContext(CommandContext.Enabled, enabled);
+
+    if (!enabled) {
+        Logger.log(`GitLens(v${gitlensVersion}) was NOT activated -- "git.enabled": false`);
+
+        return;
+    }
+
+    Configuration.configure(context);
 
     const cfg = configuration.get<IConfig>();
 
@@ -60,10 +71,14 @@ export async function activate(context: ExtensionContext) {
 
     context.globalState.update(GlobalState.GitLensVersion, gitlensVersion);
 
+    Container.context = context;
+
     const tracker = new DocumentStateTracker<GitDocumentState>();
+    Container.tracker = tracker;
     context.subscriptions.push(tracker);
 
     const git = new GitService(tracker);
+    Container.git = git;
     context.subscriptions.push(git);
 
     const annotationController = new AnnotationController(context, git, tracker);
@@ -91,6 +106,7 @@ export async function activate(context: ExtensionContext) {
     // Constantly over my data cap so stop collecting initialized event
     // Telemetry.trackEvent('initialized', Objects.flatten(cfg, 'config', true));
 
+    setCommandContext(CommandContext.KeyMap, configuration.get(configuration.name('keymap').value));
     // Slightly delay enabling the explorer to not stop the rest of GitLens from being usable
     setTimeout(() => setCommandContext(CommandContext.GitExplorer, true), 1000);
 

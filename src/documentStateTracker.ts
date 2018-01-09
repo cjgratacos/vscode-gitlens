@@ -1,12 +1,12 @@
 'use strict';
-import { Functions, IDeferrable } from './system';
+import { Functions, IDeferrable, Strings } from './system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextDocumentChangeEvent, TextEditor, Uri, window, workspace } from 'vscode';
 import { configuration } from './configuration';
 import { CommandContext, isTextEditor, setCommandContext } from './constants';
-import { GitService } from './gitService';
 import { Logger } from './logger';
 import { DocumentBlameStateChangeEvent, TrackedDocument } from './trackedDocument';
 
+export * from './gitDocumentState';
 export * from './trackedDocument';
 
 export interface DocumentDirtyStateChangeEvent {
@@ -62,7 +62,7 @@ export class DocumentStateTracker<T> extends Disposable {
     }
 
     private addCore(document: TextDocument): TrackedDocument<T> {
-        const key = GitService.toStateKey(document.uri);
+        const key = DocumentStateTracker.toStateKey(document.uri);
 
         // Always start out false, so we will fire the event if needed
         const doc = new TrackedDocument<T>(document, key, false, { onDidBlameStateChange: (e: DocumentBlameStateChangeEvent) => this._onDidChangeBlameState.fire(e) });
@@ -85,7 +85,7 @@ export class DocumentStateTracker<T> extends Disposable {
     get(uri: Uri): TrackedDocument<T> | undefined;
     get(key: string | TextDocument | Uri): TrackedDocument<T> | undefined {
         if (typeof key === 'string' || key instanceof Uri) {
-            key = GitService.toStateKey(key);
+            key = DocumentStateTracker.toStateKey(key);
         }
         return this._documentMap.get(key);
     }
@@ -95,7 +95,7 @@ export class DocumentStateTracker<T> extends Disposable {
     has(uri: Uri): boolean;
     has(key: string | TextDocument | Uri): boolean {
         if (typeof key === 'string' || key instanceof Uri) {
-            key = GitService.toStateKey(key);
+            key = DocumentStateTracker.toStateKey(key);
         }
         return this._documentMap.has(key);
     }
@@ -197,5 +197,12 @@ export class DocumentStateTracker<T> extends Disposable {
         doc.dispose();
         this._documentMap.delete(document);
         this._documentMap.delete(doc.key);
+    }
+
+    static toStateKey(fileName: string): string;
+    static toStateKey(uri: Uri): string;
+    static toStateKey(fileNameOrUri: string | Uri): string;
+    static toStateKey(fileNameOrUri: string | Uri): string {
+        return Strings.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
     }
 }

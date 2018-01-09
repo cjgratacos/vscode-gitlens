@@ -95,7 +95,7 @@ export class GitUri extends ((Uri as any) as UriEx) {
         if (relativeTo !== undefined) {
             directory = path.relative(relativeTo, directory);
         }
-        directory = GitService.normalizePath(directory);
+        directory = Strings.normalizePath(directory);
 
         return (!directory || directory === '.')
             ? path.basename(this.fsPath)
@@ -107,7 +107,7 @@ export class GitUri extends ((Uri as any) as UriEx) {
         if (relativeTo !== undefined) {
             relativePath = path.relative(relativeTo, relativePath);
         }
-        return GitService.normalizePath(relativePath);
+        return Strings.normalizePath(relativePath);
     }
 
     private static ensureValidUNCPath(authority: string, fsPath: string): [string, string] {
@@ -186,7 +186,7 @@ export class GitUri extends ((Uri as any) as UriEx) {
         if (relativeTo !== undefined) {
             directory = path.relative(relativeTo, directory);
         }
-        directory = GitService.normalizePath(directory);
+        directory = Strings.normalizePath(directory);
         return (!directory || directory === '.') ? '' : directory;
     }
 
@@ -222,7 +222,7 @@ export class GitUri extends ((Uri as any) as UriEx) {
         if (relativeTo !== undefined) {
             relativePath = path.relative(relativeTo, relativePath);
         }
-        return GitService.normalizePath(relativePath);
+        return Strings.normalizePath(relativePath);
     }
 
     static toRevisionUri(uri: GitUri): Uri;
@@ -252,7 +252,7 @@ export class GitUri extends ((Uri as any) as UriEx) {
         }
 
         const data: IUriRevisionData = {
-            fileName: GitService.normalizePath(path.relative(repoPath!, fileName)),
+            fileName: Strings.normalizePath(path.relative(repoPath!, fileName)),
             repoPath: repoPath!,
             sha: sha
         };

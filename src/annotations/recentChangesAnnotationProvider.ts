@@ -4,8 +4,8 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { TrackedDocument } from '../documentStateTracker';
-import { GitDocumentState, GitService, GitUri } from '../gitService';
+import { GitDocumentState, TrackedDocument } from '../documentStateTracker';
+import { GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 
 export class RecentChangesAnnotationProvider extends AnnotationProviderBase {

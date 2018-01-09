@@ -2,9 +2,9 @@
 import { ConfigurationChangeEvent, Disposable, ExtensionContext, languages, TextEditor } from 'vscode';
 import { configuration, ICodeLensConfig } from './configuration';
 import { CommandContext, setCommandContext } from './constants';
-import { DocumentBlameStateChangeEvent, DocumentStateTracker } from './documentStateTracker';
+import { DocumentBlameStateChangeEvent, DocumentStateTracker, GitDocumentState } from './documentStateTracker';
 import { GitCodeLensProvider } from './gitCodeLensProvider';
-import { GitDocumentState, GitService } from './gitService';
+import { GitService } from './gitService';
 import { Logger } from './logger';
 
 export class CodeLensController extends Disposable {

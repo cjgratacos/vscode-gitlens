@@ -1,4 +1,5 @@
 'use strict';
+import { Strings } from '../system';
 import { commands, TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
 import { ActiveEditorCommand, Commands, getCommandUri } from './common';
 import { GlyphChars } from '../constants';
@@ -60,7 +61,7 @@ export class DiffWithBranchCommand extends ActiveEditorCommand {
             // Check to see if this file has been renamed
             const statuses = await this.git.getDiffStatus(gitUri.repoPath, 'HEAD', ref, { filter: 'R' });
             if (statuses !== undefined) {
-                const fileName = GitService.normalizePath(path.relative(gitUri.repoPath, gitUri.fsPath));
+                const fileName = Strings.normalizePath(path.relative(gitUri.repoPath, gitUri.fsPath));
                 const rename = statuses.find(s => s.fileName === fileName);
                 if (rename !== undefined && rename.originalFileName !== undefined) {
                     renamedUri = Uri.file(path.join(gitUri.repoPath, rename.originalFileName));

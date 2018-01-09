@@ -5,8 +5,8 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { TrackedDocument } from '../documentStateTracker';
-import { GitBlame, GitCommit, GitDocumentState, GitService, GitUri } from '../gitService';
+import { GitDocumentState, TrackedDocument } from '../documentStateTracker';
+import { GitBlame, GitCommit, GitService, GitUri } from '../gitService';
 
 export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase {
 
