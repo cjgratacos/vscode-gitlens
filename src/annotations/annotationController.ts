@@ -4,8 +4,8 @@ import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOpti
 import { AnnotationProviderBase, TextEditorCorrelationKey } from './annotationProvider';
 import { configuration, IConfig, LineHighlightLocations } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { DocumentDirtyStateChangeEvent } from '../documentTracker';
-import { BlameabilityChangeEvent, GitContextTracker, GitService, GitUri } from '../gitService';
+import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentStateTracker } from '../documentStateTracker';
+import { GitDocumentState, GitService } from '../gitService';
 import { GutterBlameAnnotationProvider } from './gutterBlameAnnotationProvider';
 import { HeatmapBlameAnnotationProvider } from './heatmapBlameAnnotationProvider';
 import { HoverBlameAnnotationProvider } from './hoverBlameAnnotationProvider';
@@ -59,9 +59,9 @@ export class AnnotationController extends Disposable {
     private _keyboardScope: KeyboardScope | undefined = undefined;
 
     constructor(
-        private readonly context: ExtensionContext,
-        private readonly git: GitService,
-        private readonly gitContextTracker: GitContextTracker
+        private readonly _context: ExtensionContext,
+        private readonly _git: GitService,
+        private readonly _tracker: DocumentStateTracker<GitDocumentState>
     ) {
         super(() => this.dispose());
 
@@ -107,12 +107,12 @@ export class AnnotationController extends Disposable {
                         : undefined,
                     dark: {
                         gutterIconPath: cfgHighlight.locations.includes(LineHighlightLocations.Gutter)
-                            ? this.context.asAbsolutePath('images/dark/highlight-gutter.svg')
+                            ? this._context.asAbsolutePath('images/dark/highlight-gutter.svg')
                             : undefined
                     },
                     light: {
                         gutterIconPath: cfgHighlight.locations.includes(LineHighlightLocations.Gutter)
-                            ? this.context.asAbsolutePath('images/light/highlight-gutter.svg')
+                            ? this._context.asAbsolutePath('images/light/highlight-gutter.svg')
                             : undefined
                     }
                 });
@@ -143,12 +143,12 @@ export class AnnotationController extends Disposable {
                     : undefined,
                 dark: {
                     gutterIconPath: cfgHighlight.locations.includes(LineHighlightLocations.Gutter)
-                        ? this.context.asAbsolutePath('images/dark/highlight-gutter.svg')
+                        ? this._context.asAbsolutePath('images/dark/highlight-gutter.svg')
                         : undefined
                 },
                 light: {
                     gutterIconPath: cfgHighlight.locations.includes(LineHighlightLocations.Gutter)
-                        ? this.context.asAbsolutePath('images/light/highlight-gutter.svg')
+                        ? this._context.asAbsolutePath('images/light/highlight-gutter.svg')
                         : undefined
                 }
             });
@@ -189,56 +189,42 @@ export class AnnotationController extends Disposable {
 
         const provider = this.getProvider(editor);
         if (provider === undefined) {
-            this.gitContextTracker.setLineTracking(editor, false);
-
             setCommandContext(CommandContext.AnnotationStatus, undefined);
             this.detachKeyboardHook();
         }
         else {
-            this.gitContextTracker.setLineTracking(editor, true);
-
             setCommandContext(CommandContext.AnnotationStatus, AnnotationStatus.Computed);
             this.attachKeyboardHook();
         }
     }
 
-    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
-        if (e.blameable || e.editor === undefined) return;
+    private onBlameStateChanged(e: DocumentBlameStateChangeEvent) {
+        // Only care if we are becoming un-blameable
+        if (e.blameable) return;
 
-        this.clear(e.editor, AnnotationClearReason.BlameabilityChanged);
+        Logger.log('AnnotationController.onBlameStateChanged', e.blameable);
+
+        const editor = window.activeTextEditor;
+        if (editor === undefined) return;
+
+        this.clear(editor, AnnotationClearReason.BlameabilityChanged);
     }
 
-    // private onLineDirtyStateChanged(e: LineDirtyStateChangeEvent) {
-    //     if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
-
-    //     Logger.log('AnnotationController.onLineDirtyStateChanged', e.dirty);
-
-    //     for (const p of this._annotationProviders.values()) {
-    //         if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
-
-    //         p.reset();
-    //     }
-    // }
-
     private onDirtyStateChanged(e: DocumentDirtyStateChangeEvent) {
-        // if (e.editor === undefined || !this.git.isTrackable(e.editor.document.uri)) return;
-
         Logger.log('AnnotationController.onDirtyStateChanged', e.dirty);
 
         for (const [key, p] of this._annotationProviders) {
             if (p.document !== e.document) continue;
-            // if (!TextDocumentComparer.equals(p.document, e.editor.document)) continue;
 
             this.clearCore(key, AnnotationClearReason.DocumentChanged);
         }
     }
 
     private onTextDocumentClosed(document: TextDocument) {
-        if (!this.git.isTrackable(document.uri)) return;
+        if (!this._git.isTrackable(document.uri)) return;
 
         for (const [key, p] of this._annotationProviders) {
             if (p.document !== document) continue;
-            // if (!TextDocumentComparer.equals(p.document, document)) continue;
 
             this.clearCore(key, AnnotationClearReason.DocumentClosed);
         }
@@ -324,7 +310,7 @@ export class AnnotationController extends Disposable {
 
     getAnnotationType(editor: TextEditor | undefined): FileAnnotationType | undefined {
         const provider = this.getProvider(editor);
-        return provider !== undefined && this.git.isEditorBlameable(editor!) ? provider.annotationType : undefined;
+        return provider !== undefined && this._git.isEditorBlameable(editor!) ? provider.annotationType : undefined;
     }
 
     getProvider(editor: TextEditor | undefined): AnnotationProviderBase | undefined {
@@ -333,7 +319,7 @@ export class AnnotationController extends Disposable {
     }
 
     async showAnnotations(editor: TextEditor, type: FileAnnotationType, shaOrLine?: string | number): Promise<boolean> {
-        if (editor === undefined || editor.document === undefined || !this.git.isEditorBlameable(editor)) return false;
+        if (editor === undefined || editor.document === undefined || !this._git.isEditorBlameable(editor)) return false;
 
         const currentProvider = this.getProvider(editor);
         if (currentProvider !== undefined && currentProvider.annotationType === type) {
@@ -380,24 +366,27 @@ export class AnnotationController extends Disposable {
         // Allows pressing escape to exit the annotations
         this.attachKeyboardHook();
 
-        const gitUri = await GitUri.fromUri(editor.document.uri, this.git);
+        let trackedDocument = this._tracker.get(editor.document);
+        if (trackedDocument === undefined) {
+            trackedDocument = await this._tracker.add(editor.document);
+        }
 
         let provider: AnnotationProviderBase | undefined = undefined;
         switch (type) {
             case FileAnnotationType.Gutter:
-                provider = new GutterBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
+                provider = new GutterBlameAnnotationProvider(this._context, editor, trackedDocument, Decorations.blameAnnotation, Decorations.blameHighlight, this._git);
                 break;
 
             case FileAnnotationType.Heatmap:
-                provider = new HeatmapBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, undefined, this.git, gitUri);
+                provider = new HeatmapBlameAnnotationProvider(this._context, editor, trackedDocument, Decorations.blameAnnotation, undefined, this._git);
                 break;
 
             case FileAnnotationType.Hover:
-                provider = new HoverBlameAnnotationProvider(this.context, editor, this.gitContextTracker, Decorations.blameAnnotation, Decorations.blameHighlight, this.git, gitUri);
+                provider = new HoverBlameAnnotationProvider(this._context, editor, trackedDocument, Decorations.blameAnnotation, Decorations.blameHighlight, this._git);
                 break;
 
             case FileAnnotationType.RecentChanges:
-                provider = new RecentChangesAnnotationProvider(this.context, editor, this.gitContextTracker, undefined, Decorations.recentChangesHighlight!, this.git, gitUri);
+                provider = new RecentChangesAnnotationProvider(this._context, editor, trackedDocument, undefined, Decorations.recentChangesHighlight!, this._git);
                 break;
         }
         if (provider === undefined || !(await provider.validate())) return false;
@@ -414,8 +403,8 @@ export class AnnotationController extends Disposable {
                 window.onDidChangeTextEditorViewColumn(this.onTextEditorViewColumnChanged, this),
                 window.onDidChangeVisibleTextEditors(this.onVisibleTextEditorsChanged, this),
                 workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this),
-                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
-                this.gitContextTracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
+                this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+                this._tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
                 // this.gitContextTracker.onDidChangeLineDirtyState(this.onLineDirtyStateChanged, this)
             );
         }
@@ -430,7 +419,7 @@ export class AnnotationController extends Disposable {
     }
 
     async toggleAnnotations(editor: TextEditor, type: FileAnnotationType, shaOrLine?: string | number): Promise<boolean> {
-        if (!editor || !editor.document || (type === FileAnnotationType.RecentChanges ? !this.git.isTrackable(editor.document.uri) : !this.git.isEditorBlameable(editor))) return false;
+        if (!editor || !editor.document || (type === FileAnnotationType.RecentChanges ? !this._git.isTrackable(editor.document.uri) : !this._git.isEditorBlameable(editor))) return false;
 
         const provider = this.getProvider(editor);
         if (provider === undefined) return this.showAnnotations(editor, type, shaOrLine);

@@ -4,7 +4,7 @@ import { Disposable, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { CommitFileNode, CommitFileNodeDisplayAs } from './commitFileNode';
 import { ExplorerNode, MessageNode, ResourceType } from './explorerNode';
 import { GitExplorer } from './gitExplorer';
-import { BlameabilityChangeEvent, BlameabilityChangeReason, GitCommitType, GitLogCommit, GitService, GitUri, Repository, RepositoryChange, RepositoryChangeEvent } from '../gitService';
+import { GitCommitType, GitLogCommit, GitService, GitUri, Repository, RepositoryChange, RepositoryChangeEvent } from '../gitService';
 import { Logger } from '../logger';
 
 export class FileHistoryNode extends ExplorerNode {
@@ -87,8 +87,8 @@ export class FileHistoryNode extends ExplorerNode {
         if (this.explorer.autoRefresh) {
             this.disposable = this.disposable || Disposable.from(
                 this.explorer.onDidChangeAutoRefresh(this.onAutoRefreshChanged, this),
-                this.repo.onDidChange(this.onRepoChanged, this),
-                this.explorer.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+                this.repo.onDidChange(this.onRepoChanged, this)
+                // this.explorer.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
             );
         }
         else if (this.disposable !== undefined) {
@@ -101,13 +101,13 @@ export class FileHistoryNode extends ExplorerNode {
         this.updateSubscription();
     }
 
-    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
-        if (!e.blameable || e.reason !== BlameabilityChangeReason.DocumentChanged) return;
+    // private onBlameabilityChanged(e: BlameabilityChangeEvent) {
+    //     if (!e.blameable || e.reason !== BlameabilityChangeReason.DocumentChanged) return;
 
-        // Logger.log(`RepositoryNode.onBlameabilityChanged(${e.reason}); triggering node refresh`);
+    //     // Logger.log(`RepositoryNode.onBlameabilityChanged(${e.reason}); triggering node refresh`);
 
-        this.explorer.refreshNode(this);
-    }
+    //     this.explorer.refreshNode(this);
+    // }
 
     private onRepoChanged(e: RepositoryChangeEvent) {
         if (!e.changed(RepositoryChange.Repository)) return;

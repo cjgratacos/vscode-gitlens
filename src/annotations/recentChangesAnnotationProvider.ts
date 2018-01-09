@@ -4,30 +4,32 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitContextTracker, GitService, GitUri } from '../gitService';
+import { TrackedDocument } from '../documentStateTracker';
+import { GitDocumentState, GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 
 export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
 
+    private readonly _uri: GitUri;
+
     constructor(
         context: ExtensionContext,
         editor: TextEditor,
-        gitContextTracker: GitContextTracker,
+        trackedDocument: TrackedDocument<GitDocumentState>,
         decoration: TextEditorDecorationType | undefined,
         highlightDecoration: TextEditorDecorationType | undefined,
-        private readonly git: GitService,
-        private readonly uri: GitUri
+        private readonly git: GitService
     ) {
-        super(context, editor, gitContextTracker, decoration, highlightDecoration);
+        super(context, editor, trackedDocument, decoration, highlightDecoration);
     }
 
     async onProvideAnnotation(shaOrLine?: string | number): Promise<boolean> {
         this.annotationType = FileAnnotationType.RecentChanges;
 
-        const commit = await this.git.getLogCommit(this.uri.repoPath, this.uri.fsPath, { previous: true });
+        const commit = await this.git.getLogCommit(this._uri.repoPath, this._uri.fsPath, { previous: true });
         if (commit === undefined) return false;
 
-        const diff = await this.git.getDiffForFile(this.uri, commit.previousSha);
+        const diff = await this.git.getDiffForFile(this._uri, commit.previousSha);
         if (diff === undefined) return false;
 
         const start = process.hrtime();
@@ -57,7 +59,7 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
 
                 let message: MarkdownString | undefined = undefined;
                 if (cfg.hover.changes) {
-                    message = Annotations.getHoverDiffMessage(commit, this.uri, line);
+                    message = Annotations.getHoverDiffMessage(commit, this._uri, line);
                 }
 
                 this._decorations.push({
@@ -67,7 +69,7 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
             }
         }
 
-        this.editor.setDecorations(this.highlightDecoration!, this._decorations);
+        this.editor.setDecorations(this._highlightDecoration!, this._decorations);
 
         const duration = process.hrtime(start);
         Logger.log(`${(duration[0] * 1000) + Math.floor(duration[1] / 1000000)} ms to compute recent changes annotations`);

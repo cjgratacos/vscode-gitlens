@@ -3,7 +3,7 @@ import { Iterables, Objects, Strings, TernarySearchTree } from './system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextEditor, Uri, window, WindowState, workspace, WorkspaceFolder, WorkspaceFoldersChangeEvent } from 'vscode';
 import { configuration, IConfig, IRemotesConfig } from './configuration';
 import { CommandContext, DocumentSchemes, setCommandContext } from './constants';
-import { DocumentState, DocumentStateTracker } from './documentTracker';
+import { DocumentStateTracker, TrackedDocument } from './documentStateTracker';
 import { RemoteProviderFactory, RemoteProviderMap } from './git/remotes/factory';
 import { CommitFormatting, Git, GitAuthor, GitBlame, GitBlameCommit, GitBlameLine, GitBlameLines, GitBlameParser, GitBranch, GitBranchParser, GitCommit, GitCommitType, GitDiff, GitDiffChunkLine, GitDiffParser, GitDiffShortStat, GitLog, GitLogCommit, GitLogParser, GitRemote, GitRemoteParser, GitStash, GitStashParser, GitStatus, GitStatusFile, GitStatusParser, GitTag, GitTagParser, IGit, Repository } from './git/git';
 import { GitUri, IGitCommitInfo } from './git/gitUri';
@@ -17,26 +17,14 @@ export * from './git/formatters/commit';
 export * from './git/formatters/status';
 export { getNameFromRemoteResource, RemoteProvider, RemoteResource, RemoteResourceType } from './git/remotes/provider';
 export { RemoteProviderFactory } from './git/remotes/factory';
-export * from './git/gitContextTracker';
 
-class UriCacheEntry {
-
-    constructor(
-        public readonly uri: GitUri
-    ) { }
-}
-
-class DocumentGitState implements DocumentState {
+export class GitDocumentState {
 
     private cache: Map<string, CachedBlame | CachedDiff | CachedLog> = new Map();
 
     constructor(
         public readonly key: string
     ) { }
-
-    get hasErrors(): boolean {
-        return Iterables.every(this.cache.values(), entry => entry.errorMessage !== undefined);
-    }
 
     get<T extends CachedBlame | CachedDiff | CachedLog>(key: string): T | undefined {
         return this.cache.get(key) as T;
@@ -65,15 +53,6 @@ export enum GitRepoSearchBy {
     Sha = 'sha'
 }
 
-export enum GitChangeReason {
-    GitCache = 'git-cache',
-    Repositories = 'repositories'
-}
-
-export interface GitChangeEvent {
-    reason: GitChangeReason;
-}
-
 let _instance: GitService;
 
 export class GitService extends Disposable {
@@ -89,36 +68,26 @@ export class GitService extends Disposable {
 
     config: IConfig;
 
-    private _onDidBlameFail = new EventEmitter<string>();
-    get onDidBlameFail(): Event<string> {
-        return this._onDidBlameFail.event;
-    }
-
-    private _onDidChange = new EventEmitter<GitChangeEvent>();
-    get onDidChange(): Event<GitChangeEvent> {
-        return this._onDidChange.event;
+    private _onDidRepositoriesChange = new EventEmitter<void>();
+    get onDidRepositoriesChange(): Event<void> {
+        return this._onDidRepositoriesChange.event;
     }
 
     private readonly _disposable: Disposable;
-    readonly _documentTracker: DocumentStateTracker<DocumentGitState>;
     private readonly _repositoryTree: TernarySearchTree<Repository>;
     private _repositoriesLoadingPromise: Promise<void> | undefined;
     private _suspended: boolean = false;
     private readonly _trackedCache: Map<string, boolean | Promise<boolean>>;
-    private readonly _versionedUriCache: Map<string, UriCacheEntry>;
 
-    constructor() {
+    constructor(private readonly _tracker: DocumentStateTracker<GitDocumentState>) {
         super(() => this.dispose());
 
         _instance = this;
 
-        this._documentTracker = new DocumentStateTracker();
         this._repositoryTree = TernarySearchTree.forPaths();
         this._trackedCache = new Map();
-        this._versionedUriCache = new Map();
 
         this._disposable = Disposable.from(
-            this._documentTracker,
             window.onDidChangeWindowState(this.onWindowStateChanged, this),
             workspace.onDidChangeWorkspaceFolders(this.onWorkspaceFoldersChanged, this),
             configuration.onDidChange(this.onConfigurationChanged, this)
@@ -130,11 +99,9 @@ export class GitService extends Disposable {
 
     dispose() {
         this._repositoryTree.forEach(r => r.dispose());
+        this._trackedCache.clear();
 
         this._disposable && this._disposable.dispose();
-
-        this._trackedCache.clear();
-        this._versionedUriCache.clear();
     }
 
     get UseCaching() {
@@ -142,7 +109,6 @@ export class GitService extends Disposable {
     }
 
     private onAnyRepositoryChanged(repo: Repository) {
-        // this._documentTracker.clear(true);
         this._trackedCache.clear();
     }
 
@@ -151,17 +117,9 @@ export class GitService extends Disposable {
 
         const cfg = configuration.get<IConfig>();
 
+        // LAZY: This should not be here
         if (initializing || configuration.changed(e, configuration.name('keymap').value)) {
             setCommandContext(CommandContext.KeyMap, cfg.keymap);
-        }
-
-        if (initializing || configuration.changed(e, configuration.name('advanced')('caching')('enabled').value)) {
-            if (cfg.advanced.caching.enabled) {
-                this._documentTracker.start();
-            }
-            else {
-                this._documentTracker.stop();
-            }
         }
 
         if (initializing || configuration.changed(e, configuration.name('defaultDateStyle').value) ||
@@ -170,13 +128,6 @@ export class GitService extends Disposable {
         }
 
         this.config = cfg;
-
-        // // Only count the change if we aren't initializing
-        // if (!initializing && configuration.changed(e, configuration.name('blame')('ignoreWhitespace').value, null)) {
-        //     this._documentTracker.clear(true);
-
-        //     this.fireChange(GitChangeReason.GitCache);
-        // }
     }
 
     private onWindowStateChanged(e: WindowState) {
@@ -235,7 +186,7 @@ export class GitService extends Disposable {
 
         if (!initializing) {
             // Defer the event trigger enough to let everything unwind
-            setImmediate(() => this.fireChange(GitChangeReason.Repositories));
+            setImmediate(() => this.fireRepositoriesChanged());
         }
     }
 
@@ -359,8 +310,8 @@ export class GitService extends Disposable {
         await setCommandContext(CommandContext.HasRemotes, hasRemotes);
     }
 
-    private fireChange(reason: GitChangeReason) {
-        this._onDidChange.fire({ reason: reason });
+    private fireRepositoriesChanged() {
+        this._onDidRepositoriesChange.fire();
     }
 
     checkoutFile(uri: GitUri, sha?: string) {
@@ -461,14 +412,14 @@ export class GitService extends Disposable {
         return repo.path;
     }
 
-    public async getBlameability(uri: GitUri): Promise<boolean> {
-        if (!this.UseCaching) return await this.isTracked(uri);
+    // public async getBlameability(uri: GitUri): Promise<boolean> {
+    //     if (!this.UseCaching) return await this.isTracked(uri);
 
-        const doc = this._documentTracker.get(uri);
-        if (doc === undefined || doc.state === undefined) return await this.isTracked(uri);
+    //     const doc = this._documentTracker.get(uri);
+    //     if (doc === undefined || doc.state === undefined) return await this.isTracked(uri);
 
-        return !doc.state.hasErrors;
-    }
+    //     return !doc.state.hasErrors;
+    // }
 
     async getBlameForFile(uri: GitUri): Promise<GitBlame | undefined> {
         let key = 'blame';
@@ -476,16 +427,14 @@ export class GitService extends Disposable {
             key += `:${uri.sha}`;
         }
 
-        let state;
-        if (this.UseCaching) {
-            let doc = this._documentTracker.get(uri);
-            if (doc === undefined) {
-                doc = await this._documentTracker.add(uri);
-            }
-            state = doc.state;
+        let doc = this._tracker.get(uri);
+        if (doc === undefined) {
+            doc = await this._tracker.add(uri);
+        }
 
-            if (state !== undefined) {
-                const cachedBlame = state.get<CachedBlame>(key);
+        if (this.UseCaching) {
+            if (doc.state !== undefined) {
+                const cachedBlame = doc.state.get<CachedBlame>(key);
                 if (cachedBlame !== undefined) {
                     Logger.log(`getBlameForFile[Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
                     return cachedBlame.item;
@@ -494,21 +443,20 @@ export class GitService extends Disposable {
 
             Logger.log(`getBlameForFile[Not Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
 
-            if (state === undefined) {
-                state = new DocumentGitState(doc.key);
-                doc.state = state;
+            if (doc.state === undefined) {
+                doc.state = new GitDocumentState(doc.key);
             }
         }
         else {
             Logger.log(`getBlameForFile('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
         }
 
-        const promise = this.getBlameForFileCore(uri, state, key);
+        const promise = this.getBlameForFileCore(uri, doc, key);
 
-        if (state) {
-            Logger.log(`Add blame cache for '${state.key}:${key}'`);
+        if (doc.state !== undefined) {
+            Logger.log(`Add blame cache for '${doc.state.key}:${key}'`);
 
-            state.set<CachedBlame>(key, {
+            doc.state.set<CachedBlame>(key, {
                 item: promise
             } as CachedBlame);
         }
@@ -516,12 +464,9 @@ export class GitService extends Disposable {
         return promise;
     }
 
-    private async getBlameForFileCore(uri: GitUri, entry: DocumentGitState | undefined, key: string): Promise<GitBlame | undefined> {
+    private async getBlameForFileCore(uri: GitUri, document: TrackedDocument<GitDocumentState>, key: string): Promise<GitBlame | undefined> {
         if (!(await this.isTracked(uri))) {
             Logger.log(`Skipping blame; '${uri.fsPath}' is not tracked`);
-            if (entry && entry.key) {
-                this._onDidBlameFail.fire(entry.key);
-            }
             return GitService.emptyPromise as Promise<GitBlame>;
         }
 
@@ -534,16 +479,17 @@ export class GitService extends Disposable {
         }
         catch (ex) {
             // Trap and cache expected blame errors
-            if (entry) {
+            if (document.state !== undefined) {
                 const msg = ex && ex.toString();
-                Logger.log(`Replace blame cache with empty promise for '${entry.key}:${key}'`);
+                Logger.log(`Replace blame cache with empty promise for '${document.state.key}:${key}'`);
 
-                entry.set<CachedBlame>(key, {
+                document.state.set<CachedBlame>(key, {
                     item: GitService.emptyPromise,
                     errorMessage: msg
                 } as CachedBlame);
 
-                this._onDidBlameFail.fire(entry.key);
+                document.setBlameFailure();
+
                 return GitService.emptyPromise as Promise<GitBlame>;
             }
 
@@ -554,16 +500,14 @@ export class GitService extends Disposable {
     async getBlameForFileContents(uri: GitUri, contents: string): Promise<GitBlame | undefined> {
         const key = `blame:${Strings.sha1(contents)}`;
 
-        let state;
-        if (this.UseCaching) {
-            let doc = this._documentTracker.get(uri);
-            if (doc === undefined) {
-                doc = await this._documentTracker.add(uri);
-            }
-            state = doc.state;
+        let doc = this._tracker.get(uri);
+        if (doc === undefined) {
+            doc = await this._tracker.add(uri);
+        }
 
-            if (state !== undefined) {
-                const cachedBlame = state.get<CachedBlame>(key);
+        if (this.UseCaching) {
+            if (doc.state !== undefined) {
+                const cachedBlame = doc.state.get<CachedBlame>(key);
                 if (cachedBlame !== undefined) {
                     Logger.log(`getBlameForFileContents[Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
                     return cachedBlame.item;
@@ -572,21 +516,20 @@ export class GitService extends Disposable {
 
             Logger.log(`getBlameForFileContents[Not Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
 
-            if (state === undefined) {
-                state = new DocumentGitState(doc.key);
-                doc.state = state;
+            if (doc.state === undefined) {
+                doc.state = new GitDocumentState(doc.key);
             }
         }
         else {
             Logger.log(`getBlameForFileContents('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}')`);
         }
 
-        const promise = this.getBlameForFileContentsCore(uri, contents, state, key);
+        const promise = this.getBlameForFileContentsCore(uri, contents, doc, key);
 
-        if (state) {
-            Logger.log(`Add blame cache for '${state.key}:${key}'`);
+        if (doc.state !== undefined) {
+            Logger.log(`Add blame cache for '${doc.state.key}:${key}'`);
 
-            state.set<CachedBlame>(key, {
+            doc.state.set<CachedBlame>(key, {
                 item: promise
             } as CachedBlame);
         }
@@ -594,12 +537,9 @@ export class GitService extends Disposable {
         return promise;
     }
 
-    async getBlameForFileContentsCore(uri: GitUri, contents: string, entry: DocumentGitState | undefined, key: string): Promise<GitBlame | undefined> {
+    async getBlameForFileContentsCore(uri: GitUri, contents: string, document: TrackedDocument<GitDocumentState>, key: string): Promise<GitBlame | undefined> {
         if (!(await this.isTracked(uri))) {
             Logger.log(`Skipping blame; '${uri.fsPath}' is not tracked`);
-            if (entry && entry.key) {
-                this._onDidBlameFail.fire(entry.key);
-            }
             return GitService.emptyPromise as Promise<GitBlame>;
         }
 
@@ -612,16 +552,16 @@ export class GitService extends Disposable {
         }
         catch (ex) {
             // Trap and cache expected blame errors
-            if (entry) {
+            if (document.state !== undefined) {
                 const msg = ex && ex.toString();
-                Logger.log(`Replace blame cache with empty promise for '${entry.key}:${key}'`);
+                Logger.log(`Replace blame cache with empty promise for '${document.state.key}:${key}'`);
 
-                entry.set<CachedBlame>(key, {
+                document.state.set<CachedBlame>(key, {
                     item: GitService.emptyPromise,
                     errorMessage: msg
                 } as CachedBlame);
 
-                this._onDidBlameFail.fire(entry.key);
+                document.setBlameFailure();
                 return GitService.emptyPromise as Promise<GitBlame>;
             }
 
@@ -791,12 +731,6 @@ export class GitService extends Disposable {
         return GitBranchParser.parse(data, repoPath) || [];
     }
 
-    getCacheEntryKey(fileName: string): string;
-    getCacheEntryKey(uri: Uri): string;
-    getCacheEntryKey(fileNameOrUri: string | Uri): string {
-        return Git.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
-    }
-
     async getChangedFilesCount(repoPath: string, sha?: string): Promise<GitDiffShortStat | undefined> {
         Logger.log(`getChangedFilesCount('${repoPath}', '${sha}')`);
 
@@ -810,10 +744,9 @@ export class GitService extends Disposable {
         return await Git.config_get(key, repoPath);
     }
 
-    getGitUriForVersionedFile(uri: Uri) {
-        const cacheKey = this.getCacheEntryKey(uri);
-        const entry = this._versionedUriCache.get(cacheKey);
-        return entry && entry.uri;
+    getGitUri(uri: Uri) {
+        const doc = this._tracker.get(uri);
+        return doc !== undefined ? doc.uri : undefined;
     }
 
     async getDiffForFile(uri: GitUri, sha1?: string, sha2?: string): Promise<GitDiff | undefined> {
@@ -829,16 +762,14 @@ export class GitService extends Disposable {
             key += `:${sha2}`;
         }
 
-        let state: DocumentGitState | undefined;
-        if (this.UseCaching) {
-            let doc = this._documentTracker.get(uri);
-            if (doc === undefined) {
-                doc = await this._documentTracker.add(uri);
-            }
-            state = doc.state;
+        let doc = this._tracker.get(uri);
+        if (doc === undefined) {
+            doc = await this._tracker.add(uri);
+        }
 
-            if (state !== undefined) {
-                const cachedDiff = state.get<CachedDiff>(key);
+        if (this.UseCaching) {
+            if (doc.state !== undefined) {
+                const cachedDiff = doc.state.get<CachedDiff>(key);
                 if (cachedDiff !== undefined) {
                     Logger.log(`getDiffForFile[Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${sha1}', '${sha2}')`);
                     return cachedDiff.item;
@@ -847,21 +778,20 @@ export class GitService extends Disposable {
 
             Logger.log(`getDiffForFile[Not Cached(${key})]('${uri.repoPath}', '${uri.fsPath}', '${sha1}', '${sha2}')`);
 
-            if (state === undefined) {
-                state = new DocumentGitState(doc.key);
-                doc.state = state;
+            if (doc.state === undefined) {
+                doc.state = new GitDocumentState(doc.key);
             }
         }
         else {
             Logger.log(`getDiffForFile('${uri.repoPath}', '${uri.fsPath}', '${sha1}', '${sha2}')`);
         }
 
-        const promise = this.getDiffForFileCore(uri.repoPath, uri.fsPath, sha1, sha2, { encoding: GitService.getEncoding(uri) }, state, key);
+        const promise = this.getDiffForFileCore(uri.repoPath, uri.fsPath, sha1, sha2, { encoding: GitService.getEncoding(uri) }, doc, key);
 
-        if (state) {
-            Logger.log(`Add log cache for '${state.key}:${key}'`);
+        if (doc.state !== undefined) {
+            Logger.log(`Add log cache for '${doc.state.key}:${key}'`);
 
-            state.set<CachedDiff>(key, {
+            doc.state.set<CachedDiff>(key, {
                 item: promise
             } as CachedDiff);
         }
@@ -869,7 +799,7 @@ export class GitService extends Disposable {
         return promise;
     }
 
-    private async getDiffForFileCore(repoPath: string | undefined, fileName: string, sha1: string | undefined, sha2: string | undefined, options: { encoding?: string }, entry: DocumentGitState | undefined, key: string): Promise<GitDiff | undefined> {
+    private async getDiffForFileCore(repoPath: string | undefined, fileName: string, sha1: string | undefined, sha2: string | undefined, options: { encoding?: string }, document: TrackedDocument<GitDocumentState>, key: string): Promise<GitDiff | undefined> {
         const [file, root] = Git.splitPath(fileName, repoPath, false);
 
         try {
@@ -879,11 +809,11 @@ export class GitService extends Disposable {
         }
         catch (ex) {
             // Trap and cache expected diff errors
-            if (entry) {
+            if (document.state !== undefined) {
                 const msg = ex && ex.toString();
-                Logger.log(`Replace diff cache with empty promise for '${entry.key}:${key}'`);
+                Logger.log(`Replace diff cache with empty promise for '${document.state.key}:${key}'`);
 
-                entry.set<CachedDiff>(key, {
+                document.state.set<CachedDiff>(key, {
                     item: GitService.emptyPromise,
                     errorMessage: msg
                 } as CachedDiff);
@@ -1034,16 +964,14 @@ export class GitService extends Disposable {
             key += `:n${options.maxCount}`;
         }
 
-        let state;
-        if (this.UseCaching && options.range === undefined && !options.reverse) {
-            let doc = this._documentTracker.get(fileName);
-            if (doc === undefined) {
-                doc = await this._documentTracker.add(fileName);
-            }
-            state = doc.state;
+        let doc = this._tracker.get(fileName);
+        if (doc === undefined) {
+            doc = await this._tracker.add(fileName);
+        }
 
-            if (state !== undefined) {
-                const cachedLog = state.get<CachedLog>(key);
+        if (this.UseCaching && options.range === undefined && !options.reverse) {
+            if (doc.state !== undefined) {
+                const cachedLog = doc.state.get<CachedLog>(key);
                 if (cachedLog !== undefined) {
                     Logger.log(`getLogForFile[Cached(${key})]('${repoPath}', '${fileName}', '${options.ref}', ${options.maxCount}, undefined, ${options.reverse}, ${options.skipMerges})`);
                     return cachedLog.item;
@@ -1051,7 +979,7 @@ export class GitService extends Disposable {
 
                 if (key !== 'log') {
                     // Since we are looking for partial log, see if we have the log of the whole file
-                    const cachedLog = state.get<CachedLog>('log');
+                    const cachedLog = doc.state.get<CachedLog>('log');
                     if (cachedLog !== undefined) {
                         if (options.ref === undefined) {
                             Logger.log(`getLogForFile[Cached(~${key})]('${repoPath}', '${fileName}', '', ${options.maxCount}, undefined, ${options.reverse}, ${options.skipMerges})`);
@@ -1070,21 +998,20 @@ export class GitService extends Disposable {
 
             Logger.log(`getLogForFile[Not Cached(${key})]('${repoPath}', '${fileName}', ${options.ref}, ${options.maxCount}, undefined, ${options.reverse}, ${options.skipMerges})`);
 
-            if (state === undefined) {
-                state = new DocumentGitState(doc.key);
-                doc.state = state;
+            if (doc.state === undefined) {
+                doc.state = new GitDocumentState(doc.key);
             }
         }
         else {
             Logger.log(`getLogForFile('${repoPath}', '${fileName}', ${options.ref}, ${options.maxCount}, ${options.range && `[${options.range.start.line}, ${options.range.end.line}]`}, ${options.reverse}, ${options.skipMerges})`);
         }
 
-        const promise = this.getLogForFileCore(repoPath, fileName, options, state, key);
+        const promise = this.getLogForFileCore(repoPath, fileName, options, doc, key);
 
-        if (state) {
-            Logger.log(`Add log cache for '${state.key}:${key}'`);
+        if (doc.state !== undefined && options.range === undefined && !options.reverse) {
+            Logger.log(`Add log cache for '${doc.state.key}:${key}'`);
 
-            state.set<CachedLog>(key, {
+            doc.state.set<CachedLog>(key, {
                 item: promise
             } as CachedLog);
         }
@@ -1092,7 +1019,7 @@ export class GitService extends Disposable {
         return promise;
     }
 
-    private async getLogForFileCore(repoPath: string | undefined, fileName: string, options: { maxCount?: number, range?: Range, ref?: string, reverse?: boolean, skipMerges?: boolean }, entry: DocumentGitState | undefined, key: string): Promise<GitLog | undefined> {
+    private async getLogForFileCore(repoPath: string | undefined, fileName: string, options: { maxCount?: number, range?: Range, ref?: string, reverse?: boolean, skipMerges?: boolean }, document: TrackedDocument<GitDocumentState>, key: string): Promise<GitLog | undefined> {
         if (!(await this.isTracked(fileName, repoPath, options.ref))) {
             Logger.log(`Skipping log; '${fileName}' is not tracked`);
             return GitService.emptyPromise as Promise<GitLog>;
@@ -1119,11 +1046,11 @@ export class GitService extends Disposable {
         }
         catch (ex) {
             // Trap and cache expected log errors
-            if (entry) {
+            if (document.state !== undefined && options.range === undefined && !options.reverse) {
                 const msg = ex && ex.toString();
-                Logger.log(`Replace log cache with empty promise for '${entry.key}:${key}'`);
+                Logger.log(`Replace log cache with empty promise for '${document.state.key}:${key}'`);
 
-                entry.set<CachedLog>(key, {
+                document.state.set<CachedLog>(key, {
                     item: GitService.emptyPromise,
                     errorMessage: msg
                 } as CachedLog);
@@ -1223,7 +1150,7 @@ export class GitService extends Disposable {
             setImmediate(async () => {
                 await this.updateContext(this._repositoryTree);
 
-                this.fireChange(GitChangeReason.Repositories);
+                this.fireRepositoriesChanged();
             });
         }
 
@@ -1342,11 +1269,6 @@ export class GitService extends Disposable {
         }
 
         const file = await Git.getVersionedFile(repoPath, fileName, sha);
-        if (file === undefined) return undefined;
-
-        const cacheKey = this.getCacheEntryKey(file);
-        const entry = new UriCacheEntry(new GitUri(Uri.file(fileName), { sha: sha, repoPath: repoPath! }));
-        this._versionedUriCache.set(cacheKey, entry);
         return file;
     }
 
@@ -1357,14 +1279,15 @@ export class GitService extends Disposable {
     }
 
     hasGitUriForFile(editor: TextEditor): boolean {
-        if (editor === undefined || editor.document === undefined || editor.document.uri === undefined) return false;
+        if (editor === undefined) return false;
 
-        const cacheKey = this.getCacheEntryKey(editor.document.uri);
-        return this._versionedUriCache.has(cacheKey);
+        return this._tracker.has(editor.document);
     }
 
     isEditorBlameable(editor: TextEditor): boolean {
-        return (editor.viewColumn !== undefined || this.isTrackable(editor.document.uri) || this.hasGitUriForFile(editor));
+        return editor.viewColumn !== undefined ||
+            this.isTrackable(editor.document.uri) ||
+            this.hasGitUriForFile(editor);
     }
 
     isTrackable(scheme: string): boolean;
@@ -1390,7 +1313,7 @@ export class GitService extends Disposable {
         let fileName: string;
         if (typeof fileNameOrUri === 'string') {
             [fileName, repoPath] = Git.splitPath(fileNameOrUri, repoPath);
-            cacheKey = this.getCacheEntryKey(fileNameOrUri);
+            cacheKey = GitService.toStateKey(fileNameOrUri);
         }
         else {
             if (!this.isTrackable(fileNameOrUri)) return false;
@@ -1398,7 +1321,7 @@ export class GitService extends Disposable {
             fileName = fileNameOrUri.fsPath;
             repoPath = fileNameOrUri.repoPath;
             sha = fileNameOrUri.sha;
-            cacheKey = this.getCacheEntryKey(fileName);
+            cacheKey = GitService.toStateKey(fileName);
         }
 
         if (sha !== undefined) {
@@ -1408,10 +1331,7 @@ export class GitService extends Disposable {
         Logger.log(`isTracked('${fileName}', '${repoPath}', '${sha}')`);
 
         let tracked = this._trackedCache.get(cacheKey);
-        if (tracked !== undefined) {
-            if (typeof tracked === 'boolean') return tracked;
-            return await tracked;
-        }
+        if (tracked !== undefined) return await tracked;
 
         tracked = this.isTrackedCore(repoPath === undefined ? '' : repoPath, fileName, sha);
         this._trackedCache.set(cacheKey, tracked);
@@ -1551,6 +1471,13 @@ export class GitService extends Disposable {
         return Git.isSha(sha) || Git.isStagedUncommitted(sha)
             ? Git.shortenSha(sha)
             : sha;
+    }
+
+    static toStateKey(fileName: string): string;
+    static toStateKey(uri: Uri): string;
+    static toStateKey(fileNameOrUri: string | Uri): string;
+    static toStateKey(fileNameOrUri: string | Uri): string {
+        return Git.normalizePath(typeof fileNameOrUri === 'string' ? fileNameOrUri : fileNameOrUri.fsPath).toLowerCase();
     }
 
     static validateGitVersion(major: number, minor: number): boolean {

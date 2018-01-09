@@ -5,30 +5,32 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitBlame, GitCommit, GitContextTracker, GitService, GitUri } from '../gitService';
+import { TrackedDocument } from '../documentStateTracker';
+import { GitBlame, GitCommit, GitDocumentState, GitService, GitUri } from '../gitService';
 
 export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase {
 
     protected _blame: Promise<GitBlame | undefined>;
     protected _hoverProviderDisposable: Disposable;
+    protected readonly _uri: GitUri;
 
     constructor(
         context: ExtensionContext,
         editor: TextEditor,
-        gitContextTracker: GitContextTracker,
+        trackedDocument: TrackedDocument<GitDocumentState>,
         decoration: TextEditorDecorationType | undefined,
         highlightDecoration: TextEditorDecorationType | undefined,
-        protected readonly git: GitService,
-        protected readonly uri: GitUri
+        protected readonly _git: GitService
     ) {
-        super(context, editor, gitContextTracker, decoration, highlightDecoration);
+        super(context, editor, trackedDocument, decoration, highlightDecoration);
 
+        this._uri = trackedDocument.uri;
         this._blame = editor.document.isDirty
-            ? this.git.getBlameForFileContents(this.uri, editor.document.getText())
-            : this.git.getBlameForFile(this.uri);
+            ? this._git.getBlameForFileContents(this._uri, editor.document.getText())
+            : this._git.getBlameForFile(this._uri);
 
         if (editor.document.isDirty) {
-            this.gitContextTracker.setTriggerOnNextChange(editor.document);
+            trackedDocument.setTriggerOnNextChange();
         }
     }
 
@@ -40,15 +42,15 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
     async onReset(changes?: { decoration: TextEditorDecorationType | undefined, highlightDecoration: TextEditorDecorationType | undefined }) {
         if (this.editor !== undefined) {
             this._blame = this.editor.document.isDirty
-                ? this.git.getBlameForFileContents(this.uri, this.editor.document.getText())
-                : this.git.getBlameForFile(this.uri);
+                ? this._git.getBlameForFileContents(this._uri, this.editor.document.getText())
+                : this._git.getBlameForFile(this._uri);
         }
 
         super.onReset(changes);
     }
 
     async selection(shaOrLine?: string | number, blame?: GitBlame) {
-        if (!this.highlightDecoration) return;
+        if (!this._highlightDecoration) return;
 
         if (blame === undefined) {
             blame = await this._blame;
@@ -70,14 +72,14 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         }
 
         if (!sha) {
-            this.editor.setDecorations(this.highlightDecoration, []);
+            this.editor.setDecorations(this._highlightDecoration, []);
             return;
         }
 
         const highlightDecorationRanges = Arrays.filterMap(blame.lines,
             l => l.sha === sha ? this.editor.document.validateRange(new Range(l.line, 0, l.line, RangeEndOfLineIndex)) : undefined);
 
-        this.editor.setDecorations(this.highlightDecoration, highlightDecorationRanges);
+        this.editor.setDecorations(this._highlightDecoration, highlightDecorationRanges);
     }
 
     async validate(): Promise<boolean> {
@@ -113,7 +115,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         // Get the full commit message -- since blame only returns the summary
         let logCommit: GitCommit | undefined = undefined;
         if (!commit.isUncommitted) {
-            logCommit = await this.git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
+            logCommit = await this._git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
             if (logCommit !== undefined) {
                 // Preserve the previous commit from the blame commit
                 logCommit.previousFileName = commit.previousFileName;
@@ -121,7 +123,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
             }
         }
 
-        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, await this.git.hasRemote(commit.repoPath), this._config.blame.file.annotationType);
+        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, await this._git.hasRemote(commit.repoPath), this._config.blame.file.annotationType);
         return new Hover(message, document.validateRange(new Range(position.line, 0, position.line, RangeEndOfLineIndex)));
     }
 
@@ -129,7 +131,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         const commit = await this.getCommitForHover(position);
         if (commit === undefined) return undefined;
 
-        const hover = await Annotations.changesHover(commit, position.line, await GitUri.fromUri(document.uri, this.git), this.git);
+        const hover = await Annotations.changesHover(commit, position.line, await GitUri.fromUri(document.uri, this._git), this._git);
         return new Hover(hover.hoverMessage!, document.validateRange(new Range(position.line, 0, position.line, RangeEndOfLineIndex)));
     }
 

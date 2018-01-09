@@ -6,7 +6,7 @@ import { configuration, ExplorerFilesLayout, IGitExplorerConfig } from '../confi
 import { CommandContext, GlyphChars, setCommandContext, WorkspaceState } from '../constants';
 import { ExplorerCommands, RefreshNodeCommandArgs } from './explorerCommands';
 import { ExplorerNode, HistoryNode, MessageNode, RefreshReason, RepositoriesNode, RepositoryNode } from './explorerNodes';
-import { clearGravatarCache, GitChangeEvent, GitChangeReason, GitContextTracker, GitService, GitUri } from '../gitService';
+import { clearGravatarCache, GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 
 export * from './explorerNodes';
@@ -41,8 +41,7 @@ export class GitExplorer implements TreeDataProvider<ExplorerNode> {
     constructor(
         public readonly context: ExtensionContext,
         readonly explorerCommands: ExplorerCommands,
-        public readonly git: GitService,
-        public readonly gitContextTracker: GitContextTracker
+        public readonly git: GitService
     ) {
         commands.registerCommand('gitlens.gitExplorer.refresh', this.refresh, this);
         commands.registerCommand('gitlens.gitExplorer.refreshNode', this.refreshNode, this);
@@ -106,12 +105,12 @@ export class GitExplorer implements TreeDataProvider<ExplorerNode> {
         this._config = cfg;
     }
 
-    private onGitChanged(e: GitChangeEvent) {
-        if (this._view !== GitExplorerView.Repository || e.reason !== GitChangeReason.Repositories) return;
+    private onRepositoriesChanged() {
+        if (this._view !== GitExplorerView.Repository) return;
 
         this.clearRoot();
 
-        Logger.log(`GitExplorer[view=${this._view}].onGitChanged(${e.reason})`);
+        Logger.log(`GitExplorer[view=${this._view}].onRepositoriesChanged`);
 
         this.refresh(RefreshReason.RepoChanged);
     }
@@ -305,7 +304,7 @@ export class GitExplorer implements TreeDataProvider<ExplorerNode> {
             }
 
             if (workspaceEnabled) {
-                this._autoRefreshDisposable = this.git.onDidChange(this.onGitChanged, this);
+                this._autoRefreshDisposable = this.git.onDidRepositoriesChange(this.onRepositoriesChanged, this);
                 this.context.subscriptions.push(this._autoRefreshDisposable);
             }
         }

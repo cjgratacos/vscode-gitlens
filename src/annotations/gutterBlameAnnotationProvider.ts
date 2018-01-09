@@ -105,7 +105,7 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
         }
 
         if (this._decorations.length) {
-            this.editor.setDecorations(this.decoration!, this._decorations);
+            this.editor.setDecorations(this._decoration!, this._decorations);
         }
 
         const duration = process.hrtime(start);

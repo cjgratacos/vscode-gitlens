@@ -7,8 +7,8 @@ import { Commands } from './commands';
 import { TextEditorComparer } from './comparers';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { DocumentSchemes, isTextEditor, RangeEndOfLineIndex } from './constants';
-import { DocumentDirtyStateChangeEvent } from './documentTracker';
-import { BlameabilityChangeEvent, CommitFormatter, GitCommit, GitCommitLine, GitContextTracker, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
+import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentStateTracker } from './documentStateTracker';
+import { CommitFormatter, GitCommit, GitCommitLine, GitDocumentState, GitLogCommit, GitService, GitUri, ICommitFormatOptions } from './gitService';
 import { Logger } from './logger';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -42,9 +42,9 @@ export class CurrentLineController extends Disposable {
 
     constructor(
         context: ExtensionContext,
-        private readonly git: GitService,
-        private readonly gitContextTracker: GitContextTracker,
-        private readonly annotationController: AnnotationController
+        private readonly _git: GitService,
+        private readonly _tracker: DocumentStateTracker<GitDocumentState>,
+        private readonly _annotationController: AnnotationController
     ) {
         super(() => this.dispose());
 
@@ -52,7 +52,7 @@ export class CurrentLineController extends Disposable {
 
         this._disposable = Disposable.from(
             configuration.onDidChange(this.onConfigurationChanged, this),
-            annotationController.onDidToggleAnnotations(this.onFileAnnotationsToggled, this),
+            _annotationController.onDidToggleAnnotations(this.onFileAnnotationsToggled, this),
             debug.onDidStartDebugSession(this.onDebugSessionStarted, this)
         );
         this.onConfigurationChanged(configuration.initializingChangeEvent);
@@ -117,8 +117,8 @@ export class CurrentLineController extends Disposable {
             this._trackCurrentLineDisposable = this._trackCurrentLineDisposable || Disposable.from(
                 window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 50), this),
                 window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
-                this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this),
-                this.gitContextTracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
+                this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+                this._tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this)
             );
         }
         else if (this._trackCurrentLineDisposable !== undefined) {
@@ -138,10 +138,11 @@ export class CurrentLineController extends Disposable {
         this.refresh(editor);
     }
 
-    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
-        // Make sure this is for the editor we are tracking
-        if (!TextEditorComparer.equals(this._editor, e.editor)) return;
+    private onBlameStateChanged(e: DocumentBlameStateChangeEvent) {
+        // // Make sure this is for the editor we are tracking
+        // if (!TextEditorComparer.equals(this._editor, e.editor)) return;
 
+        // If we still aren't blameable -- kick out
         if (!this._blameable && !e.blameable) {
             this._updateBlameDebounced.cancel();
 
@@ -151,7 +152,7 @@ export class CurrentLineController extends Disposable {
         this._blameable = e.blameable;
         if (!this.canBlame || this._editor === undefined) {
             this._updateBlameDebounced.cancel();
-            this.clear(e.editor!);
+            this.clear(this._editor);
 
             return;
         }
@@ -224,7 +225,7 @@ export class CurrentLineController extends Disposable {
         this._currentLine.logCommit = undefined;
 
         if (this._uri === undefined && e.textEditor !== undefined) {
-            this._uri = await GitUri.fromUri(e.textEditor.document.uri, this.git);
+            this._uri = await GitUri.fromUri(e.textEditor.document.uri, this._git);
         }
 
         if (this.canBlame) {
@@ -240,10 +241,10 @@ export class CurrentLineController extends Disposable {
     private isEditorBlameable(editor: TextEditor | undefined): boolean {
         if (editor === undefined || editor.document === undefined) return false;
 
-        if (!this.git.isTrackable(editor.document.uri)) return false;
+        if (!this._git.isTrackable(editor.document.uri)) return false;
         if (editor.document.isUntitled && editor.document.uri.scheme === DocumentSchemes.File) return false;
 
-        return this.git.isEditorBlameable(editor);
+        return this._git.isEditorBlameable(editor);
     }
 
     private async updateBlame(line: number, editor: TextEditor) {
@@ -256,8 +257,8 @@ export class CurrentLineController extends Disposable {
         // Since blame information isn't valid when there are unsaved changes -- don't show any status
         if (this.canBlame && line >= 0) {
             const blameLine = editor.document.isDirty
-                ? await this.git.getBlameForLineContents(this._uri, line, editor.document.getText())
-                : await this.git.getBlameForLine(this._uri, line);
+                ? await this._git.getBlameForLineContents(this._uri, line, editor.document.getText())
+                : await this._git.getBlameForLine(this._uri, line);
 
             const pending = this._updateBlameDebounced.pending!();
 
@@ -320,12 +321,12 @@ export class CurrentLineController extends Disposable {
         }
 
         this._editor = editor;
-        this._uri = await GitUri.fromUri(editor.document.uri, this.git);
+        this._uri = await GitUri.fromUri(editor.document.uri, this._git);
 
         const maxLines = this._config.advanced.caching.maxLines;
         // If caching is on and the file is small enough -- kick off a blame for the whole file
         if (this._config.advanced.caching.enabled && (maxLines <= 0 || editor.document.lineCount <= maxLines)) {
-            this.git.getBlameForFile(this._uri);
+            this._git.getBlameForFile(this._uri);
         }
 
         const state = this.getLineAnnotationState();
@@ -345,7 +346,10 @@ export class CurrentLineController extends Disposable {
         if (editor.document === undefined) return;
 
         if (editor.document.isDirty) {
-            this.gitContextTracker.setTriggerOnNextChange(editor.document);
+            const doc = this._tracker.get(editor.document);
+            if (doc !== undefined) {
+                doc.setTriggerOnNextChange();
+            }
         }
 
         this.updateStatusBar(commit);
@@ -460,7 +464,7 @@ export class CurrentLineController extends Disposable {
         const commit = this._currentLine.commit;
         if (commit === undefined) return undefined;
 
-        const fileAnnotations = this.annotationController.getAnnotationType(this._editor);
+        const fileAnnotations = this._annotationController.getAnnotationType(this._editor);
         // Avoid double annotations if we are showing the whole-file hover blame annotations
         if ((fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.details) ||
             (fileAnnotations === FileAnnotationType.Hover && this._config.annotations.file.hover.details)) {
@@ -477,7 +481,7 @@ export class CurrentLineController extends Disposable {
         // Get the full commit message -- since blame only returns the summary
         let logCommit = this._currentLine.logCommit;
         if (logCommit === undefined && !commit.isUncommitted) {
-            logCommit = await this.git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
+            logCommit = await this._git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
             if (logCommit !== undefined) {
                 // Preserve the previous commit from the blame commit
                 logCommit.previousSha = commit.previousSha;
@@ -487,7 +491,7 @@ export class CurrentLineController extends Disposable {
             }
         }
 
-        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, await this.git.hasRemote(commit.repoPath), this._config.blame.file.annotationType);
+        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, await this._git.hasRemote(commit.repoPath), this._config.blame.file.annotationType);
         return new Hover(message, range);
     }
 
@@ -498,7 +502,7 @@ export class CurrentLineController extends Disposable {
         const commit = this._currentLine.commit;
         if (commit === undefined) return undefined;
 
-        const fileAnnotations = this.annotationController.getAnnotationType(this._editor);
+        const fileAnnotations = this._annotationController.getAnnotationType(this._editor);
         // Avoid double annotations if we are showing the whole-file hover blame annotations
         if ((fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.changes) ||
             (fileAnnotations === FileAnnotationType.Hover && this._config.annotations.file.hover.changes)) {
@@ -512,7 +516,9 @@ export class CurrentLineController extends Disposable {
         const range = document.validateRange(new Range(position.line, wholeLine ? 0 : RangeEndOfLineIndex, position.line, RangeEndOfLineIndex));
         if (!wholeLine && range.start.character !== position.character) return undefined;
 
-        const hover = await Annotations.changesHover(commit, position.line, this._uri, this.git);
-        return new Hover(hover.hoverMessage!, range);
+        const hover = await Annotations.changesHover(commit, position.line, this._uri, this._git);
+        if (hover.hoverMessage === undefined) return undefined;
+
+        return new Hover(hover.hoverMessage, range);
     }
 }

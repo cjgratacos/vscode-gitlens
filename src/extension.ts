@@ -11,11 +11,12 @@ import { ExplorerCommands } from './views/explorerCommands';
 import { GitContentProvider } from './gitContentProvider';
 import { GitExplorer } from './views/gitExplorer';
 import { GitRevisionCodeLensProvider } from './gitRevisionCodeLensProvider';
-import { GitContextTracker, GitService } from './gitService';
+import { GitDocumentState, GitService } from './gitService';
 import { Keyboard } from './keyboard';
 import { Logger } from './logger';
 import { Messages, SuppressedMessages } from './messages';
 import { ResultsExplorer } from './views/resultsExplorer';
+import { DocumentStateTracker } from './documentStateTracker';
 // import { Telemetry } from './telemetry';
 
 // this method is called when your extension is activated
@@ -59,19 +60,19 @@ export async function activate(context: ExtensionContext) {
 
     context.globalState.update(GlobalState.GitLensVersion, gitlensVersion);
 
-    const git = new GitService();
+    const tracker = new DocumentStateTracker<GitDocumentState>();
+    context.subscriptions.push(tracker);
+
+    const git = new GitService(tracker);
     context.subscriptions.push(git);
 
-    const gitContextTracker = new GitContextTracker(git);
-    context.subscriptions.push(gitContextTracker);
-
-    const annotationController = new AnnotationController(context, git, gitContextTracker);
+    const annotationController = new AnnotationController(context, git, tracker);
     context.subscriptions.push(annotationController);
 
-    const currentLineController = new CurrentLineController(context, git, gitContextTracker, annotationController);
+    const currentLineController = new CurrentLineController(context, git, tracker, annotationController);
     context.subscriptions.push(currentLineController);
 
-    const codeLensController = new CodeLensController(context, git, gitContextTracker);
+    const codeLensController = new CodeLensController(context, git, tracker);
     context.subscriptions.push(codeLensController);
 
     context.subscriptions.push(workspace.registerTextDocumentContentProvider(GitContentProvider.scheme, new GitContentProvider(context, git)));
@@ -80,7 +81,7 @@ export async function activate(context: ExtensionContext) {
     const explorerCommands = new ExplorerCommands(context, git);
     context.subscriptions.push(explorerCommands);
 
-    context.subscriptions.push(window.registerTreeDataProvider('gitlens.gitExplorer', new GitExplorer(context, explorerCommands, git, gitContextTracker)));
+    context.subscriptions.push(window.registerTreeDataProvider('gitlens.gitExplorer', new GitExplorer(context, explorerCommands, git)));
     context.subscriptions.push(window.registerTreeDataProvider('gitlens.resultsExplorer', new ResultsExplorer(context, explorerCommands, git)));
 
     context.subscriptions.push(new Keyboard());

@@ -2,8 +2,9 @@
 import { ConfigurationChangeEvent, Disposable, ExtensionContext, languages, TextEditor } from 'vscode';
 import { configuration, ICodeLensConfig } from './configuration';
 import { CommandContext, setCommandContext } from './constants';
+import { DocumentBlameStateChangeEvent, DocumentStateTracker } from './documentStateTracker';
 import { GitCodeLensProvider } from './gitCodeLensProvider';
-import { BlameabilityChangeEvent, BlameabilityChangeReason, GitContextTracker, GitService } from './gitService';
+import { GitDocumentState, GitService } from './gitService';
 import { Logger } from './logger';
 
 export class CodeLensController extends Disposable {
@@ -16,7 +17,7 @@ export class CodeLensController extends Disposable {
     constructor(
         private readonly context: ExtensionContext,
         private readonly git: GitService,
-        private readonly gitContextTracker: GitContextTracker
+        private readonly _tracker: DocumentStateTracker<GitDocumentState>
     ) {
         super(() => this.dispose());
 
@@ -51,7 +52,7 @@ export class CodeLensController extends Disposable {
                     this._provider = new GitCodeLensProvider(this.context, this.git);
                     this._providerDisposable = Disposable.from(
                         languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
-                        this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+                        this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this)
                     );
                 }
             }
@@ -68,9 +69,9 @@ export class CodeLensController extends Disposable {
         }
     }
 
-    private onBlameabilityChanged(e: BlameabilityChangeEvent) {
+    private onBlameStateChanged(e: DocumentBlameStateChangeEvent) {
         // Only reset if we have saved, since the code lens won't naturally be re-rendered
-        if (this._provider === undefined || !e.blameable || e.reason !== BlameabilityChangeReason.DocumentChanged) return;
+        if (this._provider === undefined || !e.blameable) return;
 
         Logger.log('Blameability changed; resetting CodeLens provider');
         this._provider.reset();
@@ -94,7 +95,7 @@ export class CodeLensController extends Disposable {
         this._provider = new GitCodeLensProvider(this.context, this.git);
         this._providerDisposable = Disposable.from(
             languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
-            this.gitContextTracker.onDidChangeBlameability(this.onBlameabilityChanged, this)
+            this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this)
         );
     }
 }
