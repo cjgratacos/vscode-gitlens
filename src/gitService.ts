@@ -84,7 +84,8 @@ export class GitService extends Disposable {
 
         const cfg = configuration.get<IConfig>();
 
-        if (initializing || configuration.changed(e, configuration.name('defaultDateStyle').value) ||
+        if (initializing ||
+            configuration.changed(e, configuration.name('defaultDateStyle').value) ||
             configuration.changed(e, configuration.name('defaultDateFormat').value)) {
             CommitFormatting.reset();
         }

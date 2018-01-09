@@ -69,9 +69,14 @@ export class GitCodeLensProvider implements CodeLensProvider {
     async provideCodeLenses(document: TextDocument, token: CancellationToken): Promise<CodeLens[]> {
         if (!await this.git.isTracked(document.uri.fsPath)) return [];
 
-        const dirty = configuration.get<boolean>(configuration.name('insiders').value)
-            ? false
-            : document.isDirty;
+        let dirty = false;
+        if (document.isDirty) {
+            // TODO: Use another threshold setting
+            const maxLines = configuration.get<number>(configuration.name('advanced')('caching')('maxLines').value);
+            if (maxLines > 0 && document.lineCount > maxLines) {
+                dirty = true;
+            }
+        }
 
         const cfg = configuration.get<ICodeLensConfig>(configuration.name('codeLens').value, document.uri);
         this._debug = cfg.debug;
