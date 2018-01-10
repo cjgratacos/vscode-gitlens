@@ -1,5 +1,6 @@
 'use strict';
-import { GitBlame, GitDiff, GitLog } from './git/git';
+import { GitBlame, GitDiff, GitLog } from './../git/git';
+import { GitBlameCommit, GitLogCommit } from '../gitService';
 
 interface CachedItem<T> {
     item: Promise<T>;
@@ -25,4 +26,12 @@ export class GitDocumentState {
     set<T extends CachedBlame | CachedDiff | CachedLog>(key: string, value: T) {
         this.cache.set(key, value);
     }
+}
+
+export class GitLineState {
+
+    constructor(
+        public readonly commit: GitBlameCommit | undefined,
+        public logCommit?: GitLogCommit
+    ) { }
 }

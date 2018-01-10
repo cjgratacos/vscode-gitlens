@@ -5,7 +5,7 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitDocumentState, TrackedDocument } from '../documentStateTracker';
+import { GitDocumentState, TrackedDocument } from '../trackers/documentTracker';
 import { GitBlame, GitCommit, GitService, GitUri } from '../gitService';
 
 export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase {
@@ -30,7 +30,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
             : this._git.getBlameForFile(this._uri);
 
         if (editor.document.isDirty) {
-            trackedDocument.setTriggerOnNextChange();
+            trackedDocument.setForceDirtyStateChangeOnNextDocumentChange();
         }
     }
 

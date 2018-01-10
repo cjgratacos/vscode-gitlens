@@ -1,30 +1,41 @@
 'use strict';
-import { Functions, IDeferrable, Strings } from './system';
+import { Functions, IDeferrable, Strings } from './../system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextDocumentChangeEvent, TextEditor, Uri, window, workspace } from 'vscode';
-import { configuration } from './configuration';
-import { CommandContext, isTextEditor, setCommandContext } from './constants';
-import { Logger } from './logger';
+import { configuration } from './../configuration';
+import { CommandContext, isTextEditor, setCommandContext } from './../constants';
+// import { Logger } from './../logger';
 import { DocumentBlameStateChangeEvent, TrackedDocument } from './trackedDocument';
 
-export * from './gitDocumentState';
+export { CachedBlame, CachedDiff, CachedLog, GitDocumentState } from './gitDocumentState';
 export * from './trackedDocument';
 
-export interface DocumentDirtyStateChangeEvent {
+export interface DocumentDirtyStateChangeEvent<T> {
 
-    readonly document: TextDocument;
+    readonly editor: TextEditor;
+    readonly document: TrackedDocument<T>;
     readonly dirty: boolean;
 }
 
-export class DocumentStateTracker<T> extends Disposable {
+export interface DocumentDirtyIdleStateChangeEvent<T> {
+    readonly editor: TextEditor;
+    readonly document: TrackedDocument<T>;
+}
 
-    private _onDidChangeBlameState = new EventEmitter<DocumentBlameStateChangeEvent>();
-    get onDidChangeBlameState(): Event<DocumentBlameStateChangeEvent> {
+export class DocumentTracker<T> extends Disposable {
+
+    private _onDidChangeBlameState = new EventEmitter<DocumentBlameStateChangeEvent<T>>();
+    get onDidChangeBlameState(): Event<DocumentBlameStateChangeEvent<T>> {
         return this._onDidChangeBlameState.event;
     }
 
-    private _onDidChangeDirtyState = new EventEmitter<DocumentDirtyStateChangeEvent>();
-    get onDidChangeDirtyState(): Event<DocumentDirtyStateChangeEvent> {
+    private _onDidChangeDirtyState = new EventEmitter<DocumentDirtyStateChangeEvent<T>>();
+    get onDidChangeDirtyState(): Event<DocumentDirtyStateChangeEvent<T>> {
         return this._onDidChangeDirtyState.event;
+    }
+
+    private _onDidChangeDirtyIdleState = new EventEmitter<DocumentDirtyIdleStateChangeEvent<T>>();
+    get onDidChangeDirtyIdleState(): Event<DocumentDirtyIdleStateChangeEvent<T>> {
+        return this._onDidChangeDirtyIdleState.event;
     }
 
     private readonly _disposable: Disposable | undefined;
@@ -58,14 +69,19 @@ export class DocumentStateTracker<T> extends Disposable {
             documentOrId = await workspace.openTextDocument(documentOrId);
         }
 
-        return this.addCore(documentOrId);
+        const doc = await this.addCore(documentOrId);
+        await doc.ensureInitialized();
+
+        return doc;
     }
 
     private addCore(document: TextDocument): TrackedDocument<T> {
-        const key = DocumentStateTracker.toStateKey(document.uri);
+        const key = DocumentTracker.toStateKey(document.uri);
 
         // Always start out false, so we will fire the event if needed
-        const doc = new TrackedDocument<T>(document, key, false, { onDidBlameStateChange: (e: DocumentBlameStateChangeEvent) => this._onDidChangeBlameState.fire(e) });
+        const doc = new TrackedDocument<T>(document, key, false, {
+            onDidBlameStateChange: (e: DocumentBlameStateChangeEvent<T>) => this._onDidChangeBlameState.fire(e)
+        });
         this._documentMap.set(document, doc);
         this._documentMap.set(key, doc);
 
@@ -85,7 +101,7 @@ export class DocumentStateTracker<T> extends Disposable {
     get(uri: Uri): TrackedDocument<T> | undefined;
     get(key: string | TextDocument | Uri): TrackedDocument<T> | undefined {
         if (typeof key === 'string' || key instanceof Uri) {
-            key = DocumentStateTracker.toStateKey(key);
+            key = DocumentTracker.toStateKey(key);
         }
         return this._documentMap.get(key);
     }
@@ -95,7 +111,7 @@ export class DocumentStateTracker<T> extends Disposable {
     has(uri: Uri): boolean;
     has(key: string | TextDocument | Uri): boolean {
         if (typeof key === 'string' || key instanceof Uri) {
-            key = DocumentStateTracker.toStateKey(key);
+            key = DocumentTracker.toStateKey(key);
         }
         return this._documentMap.has(key);
     }
@@ -145,25 +161,34 @@ export class DocumentStateTracker<T> extends Disposable {
 
         doc.reset('document');
 
-        if (doc.shouldTriggerOnNextChange) {
-            doc.resetTriggerOnNextChange();
-        }
-        else {
-            if (doc.dirty === e.document.isDirty) return;
+        const dirty = e.document.isDirty;
+        const editor = window.activeTextEditor;
 
-            doc.dirty = !doc.dirty;
+        // If we currently have a pending idle tracker, either reset or cancel it
+        if (this._dirtyIdleStateChangedDebounced !== undefined && this._dirtyIdleStateChangedDebounced.pending!()) {
+            if (dirty) {
+                this._dirtyIdleStateChangedDebounced({ editor: editor!, document: doc });
+            }
+            else {
+                this._dirtyIdleStateChangedDebounced.cancel();
+            }
         }
+
+        if (!doc.forceDirtyStateChangeOnNextDocumentChange && doc.dirty === dirty) return;
+
+        doc.resetForceDirtyStateChangeOnNextDocumentChange();
+        doc.dirty = dirty;
 
         // Only fire state change events for the active document
-        const editor = window.activeTextEditor;
         if (editor === undefined || editor.document !== e.document) return;
 
-        this.fireDocumentDirtyStateChanged(editor, { document: e.document, dirty: doc.dirty } as DocumentDirtyStateChangeEvent);
+        this.fireDocumentDirtyStateChanged({ editor: editor, document: doc, dirty: doc.dirty });
     }
 
-    private _dirtyStateChangedDebounced: ((editor: TextEditor, e: DocumentDirtyStateChangeEvent) => void) & IDeferrable;
-    private fireDocumentDirtyStateChanged(editor: TextEditor, e: DocumentDirtyStateChangeEvent) {
-        Logger.log('DocumentTracker.fireDirtyStateChanged', e.document.uri.toString(), e.dirty);
+    private _dirtyIdleStateChangedDebounced: ((e: DocumentDirtyIdleStateChangeEvent<T>) => void) & IDeferrable;
+    private _dirtyStateChangedDebounced: ((e: DocumentDirtyStateChangeEvent<T>) => void) & IDeferrable;
+    private fireDocumentDirtyStateChanged(e: DocumentDirtyStateChangeEvent<T>) {
+        // Logger.log('DocumentTracker.fireDocumentDirtyStateChanged', e.document.uri.toString(), e.dirty);
 
         if (e.dirty) {
             setImmediate(() => {
@@ -171,23 +196,34 @@ export class DocumentStateTracker<T> extends Disposable {
                     this._dirtyStateChangedDebounced.cancel();
                 }
 
-                if (window.activeTextEditor !== editor) return;
+                if (window.activeTextEditor !== e.editor) return;
 
                 this._onDidChangeDirtyState.fire(e);
             });
+
+            if (this._dirtyIdleStateChangedDebounced === undefined) {
+                this._dirtyIdleStateChangedDebounced = Functions.debounce((e: DocumentDirtyIdleStateChangeEvent<T>) => {
+                    if (this._dirtyIdleStateChangedDebounced.pending!()) return;
+
+                    // Logger.log('DocumentTracker.fireDirtyIdleStateChanged', e.document.uri.toString());
+                    this._onDidChangeDirtyIdleState.fire(e);
+                }, 5000, { track: true });
+            }
+
+            this._dirtyIdleStateChangedDebounced({ editor: e.editor, document: e.document });
 
             return;
         }
 
         if (this._dirtyStateChangedDebounced === undefined) {
-            this._dirtyStateChangedDebounced = Functions.debounce((editor: TextEditor, e: DocumentDirtyStateChangeEvent) => {
-                if (window.activeTextEditor !== editor) return;
+            this._dirtyStateChangedDebounced = Functions.debounce((e: DocumentDirtyStateChangeEvent<T>) => {
+                if (window.activeTextEditor !== e.editor) return;
 
                 this._onDidChangeDirtyState.fire(e);
             }, 250);
         }
 
-        this._dirtyStateChangedDebounced(editor, e);
+        this._dirtyStateChangedDebounced(e);
     }
 
     private onTextDocumentClosed(document: TextDocument) {

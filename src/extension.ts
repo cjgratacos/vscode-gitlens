@@ -7,7 +7,7 @@ import { CommandContext, ExtensionKey, GlobalState, QualifiedExtensionId, setCom
 import { CodeLensController } from './codeLensController';
 import { configureCommands } from './commands';
 import { CurrentLineController } from './currentLineController';
-import { DocumentStateTracker, GitDocumentState } from './documentStateTracker';
+import { DocumentTracker, GitDocumentState } from './trackers/documentTracker';
 import { ExplorerCommands } from './views/explorerCommands';
 import { GitContentProvider } from './gitContentProvider';
 import { GitExplorer } from './views/gitExplorer';
@@ -73,7 +73,7 @@ export async function activate(context: ExtensionContext) {
 
     Container.context = context;
 
-    const tracker = new DocumentStateTracker<GitDocumentState>();
+    const tracker = new DocumentTracker<GitDocumentState>();
     Container.tracker = tracker;
     context.subscriptions.push(tracker);
 

@@ -4,7 +4,7 @@ import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
-import { GitDocumentState, TrackedDocument } from '../documentStateTracker';
+import { GitDocumentState, TrackedDocument } from '../trackers/documentTracker';
 import { GitService, GitUri } from '../gitService';
 import { Logger } from '../logger';
 

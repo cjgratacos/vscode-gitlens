@@ -3,10 +3,9 @@ import { Iterables, Objects, Strings, TernarySearchTree } from './system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextEditor, Uri, window, WindowState, workspace, WorkspaceFolder, WorkspaceFoldersChangeEvent } from 'vscode';
 import { configuration, IConfig, IRemotesConfig } from './configuration';
 import { CommandContext, DocumentSchemes, setCommandContext } from './constants';
-import { DocumentStateTracker, TrackedDocument } from './documentStateTracker';
+import { CachedBlame, CachedDiff, CachedLog, DocumentTracker, GitDocumentState, TrackedDocument } from './trackers/documentTracker';
 import { RemoteProviderFactory, RemoteProviderMap } from './git/remotes/factory';
 import { CommitFormatting, Git, GitAuthor, GitBlame, GitBlameCommit, GitBlameLine, GitBlameLines, GitBlameParser, GitBranch, GitBranchParser, GitCommit, GitCommitType, GitDiff, GitDiffChunkLine, GitDiffParser, GitDiffShortStat, GitLog, GitLogCommit, GitLogParser, GitRemote, GitRemoteParser, GitStash, GitStashParser, GitStatus, GitStatusFile, GitStatusParser, GitTag, GitTagParser, IGit, Repository } from './git/git';
-import { CachedBlame, CachedDiff, CachedLog, GitDocumentState } from './gitDocumentState';
 import { GitUri, IGitCommitInfo } from './git/gitUri';
 import { Logger } from './logger';
 import * as fs from 'fs';
@@ -48,7 +47,7 @@ export class GitService extends Disposable {
     private _suspended: boolean = false;
     private readonly _trackedCache: Map<string, boolean | Promise<boolean>>;
 
-    constructor(private readonly _tracker: DocumentStateTracker<GitDocumentState>) {
+    constructor(private readonly _tracker: DocumentTracker<GitDocumentState>) {
         super(() => this.dispose());
 
         this._repositoryTree = TernarySearchTree.forPaths();
@@ -532,10 +531,10 @@ export class GitService extends Disposable {
         }
     }
 
-    async getBlameForLine(uri: GitUri, line: number): Promise<GitBlameLine | undefined> {
+    async getBlameForLine(uri: GitUri, line: number, options: { skipCache?: boolean } = {}): Promise<GitBlameLine | undefined> {
         Logger.log(`getBlameForLine('${uri.repoPath}', '${uri.fsPath}', '${uri.sha}', ${line})`);
 
-        if (this.UseCaching) {
+        if (!options.skipCache && this.UseCaching) {
             const blame = await this.getBlameForFile(uri);
             if (blame === undefined) return undefined;
 
@@ -1276,7 +1275,7 @@ export class GitService extends Disposable {
         let fileName: string;
         if (typeof fileNameOrUri === 'string') {
             [fileName, repoPath] = Git.splitPath(fileNameOrUri, repoPath);
-            cacheKey = DocumentStateTracker.toStateKey(fileNameOrUri);
+            cacheKey = DocumentTracker.toStateKey(fileNameOrUri);
         }
         else {
             if (!this.isTrackable(fileNameOrUri)) return false;
@@ -1284,7 +1283,7 @@ export class GitService extends Disposable {
             fileName = fileNameOrUri.fsPath;
             repoPath = fileNameOrUri.repoPath;
             sha = fileNameOrUri.sha;
-            cacheKey = DocumentStateTracker.toStateKey(fileName);
+            cacheKey = DocumentTracker.toStateKey(fileName);
         }
 
         if (sha !== undefined) {

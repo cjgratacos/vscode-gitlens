@@ -1,6 +1,6 @@
 'use strict';
 import { commands, TextEditor, Uri, window } from 'vscode';
-import { ActiveEditorTracker } from '../activeEditorTracker';
+import { ActiveEditorTracker } from '../trackers/activeEditorTracker';
 import { ActiveEditorCommand, Commands, getCommandUri } from './common';
 import { TextEditorComparer, UriComparer } from '../comparers';
 import { BuiltInCommands } from '../constants';

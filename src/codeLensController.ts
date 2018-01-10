@@ -2,7 +2,7 @@
 import { ConfigurationChangeEvent, Disposable, ExtensionContext, languages, TextEditor } from 'vscode';
 import { configuration, ICodeLensConfig } from './configuration';
 import { CommandContext, setCommandContext } from './constants';
-import { DocumentBlameStateChangeEvent, DocumentStateTracker, GitDocumentState } from './documentStateTracker';
+import { DocumentBlameStateChangeEvent, DocumentDirtyIdleStateChangeEvent, DocumentTracker, GitDocumentState } from './trackers/documentTracker';
 import { GitCodeLensProvider } from './gitCodeLensProvider';
 import { GitService } from './gitService';
 import { Logger } from './logger';
@@ -17,7 +17,7 @@ export class CodeLensController extends Disposable {
     constructor(
         private readonly context: ExtensionContext,
         private readonly git: GitService,
-        private readonly _tracker: DocumentStateTracker<GitDocumentState>
+        private readonly _tracker: DocumentTracker<GitDocumentState>
     ) {
         super(() => this.dispose());
 
@@ -52,7 +52,8 @@ export class CodeLensController extends Disposable {
                     this._provider = new GitCodeLensProvider(this.context, this.git);
                     this._providerDisposable = Disposable.from(
                         languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
-                        this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this)
+                        this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+                        this._tracker.onDidChangeDirtyIdleState(this.onDirtyIdleStateChanged, this)
                     );
                 }
             }
@@ -69,12 +70,19 @@ export class CodeLensController extends Disposable {
         }
     }
 
-    private onBlameStateChanged(e: DocumentBlameStateChangeEvent) {
+    private onBlameStateChanged(e: DocumentBlameStateChangeEvent<GitDocumentState>) {
         // Only reset if we have saved, since the code lens won't naturally be re-rendered
         if (this._provider === undefined || !e.blameable) return;
 
-        Logger.log('Blameability changed; resetting CodeLens provider');
-        this._provider.reset();
+        Logger.log('Blame state changed; resetting CodeLens provider');
+        this._provider.reset('saved');
+    }
+
+    private onDirtyIdleStateChanged(e: DocumentDirtyIdleStateChangeEvent<GitDocumentState>) {
+        if (this._provider === undefined || !e.document.isBlameable) return;
+
+        Logger.log('Dirty idle state changed; resetting CodeLens provider');
+        this._provider.reset('idle');
     }
 
     toggleCodeLens(editor: TextEditor) {

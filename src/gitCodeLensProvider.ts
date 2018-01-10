@@ -62,7 +62,12 @@ export class GitCodeLensProvider implements CodeLensProvider {
         private readonly git: GitService
     ) { }
 
-    reset() {
+    private _skipMaxLinesOnNext: boolean = false;
+    reset(reason?: 'idle' | 'saved') {
+        if (reason === 'idle') {
+            this._skipMaxLinesOnNext = true;
+        }
+
         this._onDidChangeCodeLenses.fire();
     }
 
@@ -72,11 +77,12 @@ export class GitCodeLensProvider implements CodeLensProvider {
         let dirty = false;
         if (document.isDirty) {
             // TODO: Use another threshold setting
-            const maxLines = configuration.get<number>(configuration.name('advanced')('caching')('maxLines').value);
+            const maxLines = this._skipMaxLinesOnNext ? 0 : configuration.get<number>(configuration.name('advanced')('caching')('maxLines').value);
             if (maxLines > 0 && document.lineCount > maxLines) {
                 dirty = true;
             }
         }
+        this._skipMaxLinesOnNext = false;
 
         const cfg = configuration.get<ICodeLensConfig>(configuration.name('codeLens').value, document.uri);
         this._debug = cfg.debug;

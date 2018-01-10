@@ -1,6 +1,6 @@
 'use strict';
 import { ExtensionContext } from 'vscode';
-import { DocumentStateTracker, GitDocumentState } from './documentStateTracker';
+import { DocumentTracker, GitDocumentState } from './trackers/documentTracker';
 import { GitService } from './gitService';
 
 export class Container {
@@ -21,11 +21,11 @@ export class Container {
         Container._git = value;
     }
 
-    private static _tracker: DocumentStateTracker<GitDocumentState>;
+    private static _tracker: DocumentTracker<GitDocumentState>;
     static get tracker() {
         return Container._tracker;
     }
-    static set tracker(value: DocumentStateTracker<GitDocumentState>) {
+    static set tracker(value: DocumentTracker<GitDocumentState>) {
         Container._tracker = value;
     }
 }

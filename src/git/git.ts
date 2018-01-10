@@ -50,6 +50,8 @@ async function gitCommand(options: CommandOptions & { readonly correlationKey?: 
 const pendingCommands: Map<string, Promise<string>> = new Map();
 
 async function gitCommandCore(options: CommandOptions & { readonly correlationKey?: string }, ...args: any[]): Promise<string> {
+    const start = process.hrtime();
+
     // Fixes https://github.com/eamodio/vscode-gitlens/issues/73 & https://github.com/eamodio/vscode-gitlens/issues/161
     // See https://stackoverflow.com/questions/4144417/how-to-handle-asian-characters-in-file-names-in-git-on-os-x
     args.splice(0, 0, '-c', 'core.quotepath=false', '-c', 'color.ui=false');
@@ -84,7 +86,9 @@ async function gitCommandCore(options: CommandOptions & { readonly correlationKe
     }
     finally {
         pendingCommands.delete(command);
-        Logger.log(`Completed${command}`);
+
+        const duration = process.hrtime(start);
+        Logger.log(`Completed${command} in ${(duration[0] * 1000) + Math.floor(duration[1] / 1000000)} ms`);
     }
 
     if (encoding === 'utf8' || encoding === 'binary') return data;

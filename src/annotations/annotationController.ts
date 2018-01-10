@@ -4,7 +4,7 @@ import { ConfigurationChangeEvent, DecorationRangeBehavior, DecorationRenderOpti
 import { AnnotationProviderBase, TextEditorCorrelationKey } from './annotationProvider';
 import { configuration, IConfig, LineHighlightLocations } from '../configuration';
 import { CommandContext, isTextEditor, setCommandContext } from '../constants';
-import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentStateTracker, GitDocumentState } from '../documentStateTracker';
+import { DocumentBlameStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentTracker, GitDocumentState } from '../trackers/documentTracker';
 import { GitService } from '../gitService';
 import { GutterBlameAnnotationProvider } from './gutterBlameAnnotationProvider';
 import { HeatmapBlameAnnotationProvider } from './heatmapBlameAnnotationProvider';
@@ -61,7 +61,7 @@ export class AnnotationController extends Disposable {
     constructor(
         private readonly _context: ExtensionContext,
         private readonly _git: GitService,
-        private readonly _tracker: DocumentStateTracker<GitDocumentState>
+        private readonly _tracker: DocumentTracker<GitDocumentState>
     ) {
         super(() => this.dispose());
 
@@ -198,7 +198,7 @@ export class AnnotationController extends Disposable {
         }
     }
 
-    private onBlameStateChanged(e: DocumentBlameStateChangeEvent) {
+    private onBlameStateChanged(e: DocumentBlameStateChangeEvent<GitDocumentState>) {
         // Only care if we are becoming un-blameable
         if (e.blameable) return;
 
@@ -210,11 +210,11 @@ export class AnnotationController extends Disposable {
         this.clear(editor, AnnotationClearReason.BlameabilityChanged);
     }
 
-    private onDirtyStateChanged(e: DocumentDirtyStateChangeEvent) {
+    private onDirtyStateChanged(e: DocumentDirtyStateChangeEvent<GitDocumentState>) {
         Logger.log('AnnotationController.onDirtyStateChanged', e.dirty);
 
         for (const [key, p] of this._annotationProviders) {
-            if (p.document !== e.document) continue;
+            if (p.document !== e.document.document) continue;
 
             this.clearCore(key, AnnotationClearReason.DocumentChanged);
         }
