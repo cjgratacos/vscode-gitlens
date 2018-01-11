@@ -1,22 +1,14 @@
 'use strict';
 import { Objects, Versions } from './system';
 import { ConfigurationTarget, ExtensionContext, extensions, languages, window, workspace } from 'vscode';
-import { AnnotationController } from './annotations/annotationController';
 import { configuration, Configuration, IConfig } from './configuration';
 import { CommandContext, ExtensionKey, GlobalState, QualifiedExtensionId, setCommandContext } from './constants';
-import { CodeLensController } from './codeLensController';
 import { configureCommands } from './commands';
-import { CurrentLineController } from './currentLineController';
-import { DocumentTracker, GitDocumentState } from './trackers/documentTracker';
-import { ExplorerCommands } from './views/explorerCommands';
 import { GitContentProvider } from './gitContentProvider';
-import { GitExplorer } from './views/gitExplorer';
 import { GitRevisionCodeLensProvider } from './gitRevisionCodeLensProvider';
 import { GitService } from './gitService';
-import { Keyboard } from './keyboard';
 import { Logger } from './logger';
 import { Messages, SuppressedMessages } from './messages';
-import { ResultsExplorer } from './views/resultsExplorer';
 import { Container } from './container';
 // import { Telemetry } from './telemetry';
 
@@ -71,37 +63,15 @@ export async function activate(context: ExtensionContext) {
 
     context.globalState.update(GlobalState.GitLensVersion, gitlensVersion);
 
-    Container.context = context;
+    Container.initialize(context, cfg);
 
-    const tracker = new DocumentTracker<GitDocumentState>();
-    Container.tracker = tracker;
-    context.subscriptions.push(tracker);
+    context.subscriptions.push(workspace.registerTextDocumentContentProvider(GitContentProvider.scheme, new GitContentProvider()));
+    context.subscriptions.push(languages.registerCodeLensProvider(GitRevisionCodeLensProvider.selector, new GitRevisionCodeLensProvider()));
 
-    const git = new GitService(tracker);
-    Container.git = git;
-    context.subscriptions.push(git);
+    context.subscriptions.push(window.registerTreeDataProvider('gitlens.gitExplorer', Container.gitExplorer));
+    context.subscriptions.push(window.registerTreeDataProvider('gitlens.resultsExplorer', Container.resultsExplorer));
 
-    const annotationController = new AnnotationController(context, git, tracker);
-    context.subscriptions.push(annotationController);
-
-    const currentLineController = new CurrentLineController(context, git, tracker, annotationController);
-    context.subscriptions.push(currentLineController);
-
-    const codeLensController = new CodeLensController(context, git, tracker);
-    context.subscriptions.push(codeLensController);
-
-    context.subscriptions.push(workspace.registerTextDocumentContentProvider(GitContentProvider.scheme, new GitContentProvider(context, git)));
-    context.subscriptions.push(languages.registerCodeLensProvider(GitRevisionCodeLensProvider.selector, new GitRevisionCodeLensProvider(context, git)));
-
-    const explorerCommands = new ExplorerCommands(context, git);
-    context.subscriptions.push(explorerCommands);
-
-    context.subscriptions.push(window.registerTreeDataProvider('gitlens.gitExplorer', new GitExplorer(context, explorerCommands, git)));
-    context.subscriptions.push(window.registerTreeDataProvider('gitlens.resultsExplorer', new ResultsExplorer(context, explorerCommands, git)));
-
-    context.subscriptions.push(new Keyboard());
-
-    configureCommands(context, git, annotationController, currentLineController, codeLensController);
+    configureCommands();
 
     // Constantly over my data cap so stop collecting initialized event
     // Telemetry.trackEvent('initialized', Objects.flatten(cfg, 'config', true));
@@ -159,6 +129,23 @@ async function migrateSettings(context: ExtensionContext, previousVersion: strin
                 }
                 else if (inspection.workspaceFolderValue !== undefined) {
                     await configuration.update(section, !inspection.workspaceFolderValue, ConfigurationTarget.WorkspaceFolder);
+                }
+            }
+        }
+
+        if (Versions.compare(previous, Versions.from(7, 3, 0)) !== 1) {
+            const oldSection = 'advanced.maxQuickHistory';
+            const inspection = configuration.inspect(oldSection);
+            if (inspection !== undefined) {
+                const section = configuration.name('advanced')('maxListItems').value;
+
+                if (inspection.globalValue !== undefined) {
+                    await configuration.update(section, inspection.globalValue, ConfigurationTarget.Global);
+                    await configuration.update(oldSection, undefined, ConfigurationTarget.Global);
+                }
+                else if (inspection.workspaceFolderValue !== undefined) {
+                    await configuration.update(section, inspection.workspaceFolderValue, ConfigurationTarget.WorkspaceFolder);
+                    await configuration.update(oldSection, undefined, ConfigurationTarget.WorkspaceFolder);
                 }
             }
         }

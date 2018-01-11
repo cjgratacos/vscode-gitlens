@@ -1,12 +1,13 @@
 'use strict';
 import { Arrays, Iterables } from '../system';
-import { CancellationToken, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, TextDocument, TextEditor, TextEditorDecorationType } from 'vscode';
+import { CancellationToken, Disposable, Hover, HoverProvider, languages, Position, Range, TextDocument, TextEditor, TextEditorDecorationType } from 'vscode';
 import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
+import { Container } from '../container';
 import { GitDocumentState, TrackedDocument } from '../trackers/documentTracker';
-import { GitBlame, GitCommit, GitService, GitUri } from '../gitService';
+import { GitBlame, GitCommit, GitUri } from '../gitService';
 
 export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase {
 
@@ -15,19 +16,17 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
     protected readonly _uri: GitUri;
 
     constructor(
-        context: ExtensionContext,
         editor: TextEditor,
         trackedDocument: TrackedDocument<GitDocumentState>,
         decoration: TextEditorDecorationType | undefined,
-        highlightDecoration: TextEditorDecorationType | undefined,
-        protected readonly _git: GitService
+        highlightDecoration: TextEditorDecorationType | undefined
     ) {
-        super(context, editor, trackedDocument, decoration, highlightDecoration);
+        super(editor, trackedDocument, decoration, highlightDecoration);
 
         this._uri = trackedDocument.uri;
         this._blame = editor.document.isDirty
-            ? this._git.getBlameForFileContents(this._uri, editor.document.getText())
-            : this._git.getBlameForFile(this._uri);
+            ? Container.git.getBlameForFileContents(this._uri, editor.document.getText())
+            : Container.git.getBlameForFile(this._uri);
 
         if (editor.document.isDirty) {
             trackedDocument.setForceDirtyStateChangeOnNextDocumentChange();
@@ -42,8 +41,8 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
     async onReset(changes?: { decoration: TextEditorDecorationType | undefined, highlightDecoration: TextEditorDecorationType | undefined }) {
         if (this.editor !== undefined) {
             this._blame = this.editor.document.isDirty
-                ? this._git.getBlameForFileContents(this._uri, this.editor.document.getText())
-                : this._git.getBlameForFile(this._uri);
+                ? Container.git.getBlameForFileContents(this._uri, this.editor.document.getText())
+                : Container.git.getBlameForFile(this._uri);
         }
 
         super.onReset(changes);
@@ -115,7 +114,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         // Get the full commit message -- since blame only returns the summary
         let logCommit: GitCommit | undefined = undefined;
         if (!commit.isUncommitted) {
-            logCommit = await this._git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
+            logCommit = await Container.git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
             if (logCommit !== undefined) {
                 // Preserve the previous commit from the blame commit
                 logCommit.previousFileName = commit.previousFileName;
@@ -123,7 +122,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
             }
         }
 
-        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, await this._git.hasRemote(commit.repoPath), this._config.blame.file.annotationType);
+        const message = Annotations.getHoverMessage(logCommit || commit, Container.config.defaultDateFormat, await Container.git.hasRemote(commit.repoPath), Container.config.blame.file.annotationType);
         return new Hover(message, document.validateRange(new Range(position.line, 0, position.line, RangeEndOfLineIndex)));
     }
 
@@ -131,13 +130,13 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
         const commit = await this.getCommitForHover(position);
         if (commit === undefined) return undefined;
 
-        const hover = await Annotations.changesHover(commit, position.line, await GitUri.fromUri(document.uri, this._git), this._git);
+        const hover = await Annotations.changesHover(commit, position.line, await GitUri.fromUri(document.uri));
         return new Hover(hover.hoverMessage!, document.validateRange(new Range(position.line, 0, position.line, RangeEndOfLineIndex)));
     }
 
     private async getCommitForHover(position: Position): Promise<GitCommit | undefined> {
-        const annotationType = this._config.blame.file.annotationType;
-        const wholeLine = annotationType === FileAnnotationType.Hover || (annotationType === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.wholeLine);
+        const annotationType = Container.config.blame.file.annotationType;
+        const wholeLine = annotationType === FileAnnotationType.Hover || (annotationType === FileAnnotationType.Gutter && Container.config.annotations.file.gutter.hover.wholeLine);
         if (!wholeLine && position.character !== 0) return undefined;
 
         const blame = await this.getBlame();

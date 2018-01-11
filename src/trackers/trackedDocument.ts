@@ -43,7 +43,7 @@ export class TrackedDocument<T> extends Disposable {
     }
 
     private async initialize(uri: Uri) {
-        this._uri = await GitUri.fromUri(uri, Container.git);
+        this._uri = await GitUri.fromUri(uri);
         if (this._disposed) return;
 
         const repo = await Container.git.getRepository(this._uri);
@@ -84,6 +84,14 @@ export class TrackedDocument<T> extends Disposable {
         return this._isTracked;
     }
 
+    private _isDirtyIdle: boolean = false;
+    get isDirtyIdle() {
+        return this._isDirtyIdle;
+    }
+    set isDirtyIdle(value: boolean) {
+        this._isDirtyIdle = value;
+    }
+
     get isRevision() {
         return this._uri !== undefined ? !!this._uri.sha : false;
     }
@@ -110,6 +118,7 @@ export class TrackedDocument<T> extends Disposable {
 
     reset(reason: 'config' | 'dispose' | 'document' | 'repository') {
         this._blameFailed = false;
+        this._isDirtyIdle = false;
 
         if (this.state === undefined) return;
 
@@ -141,13 +150,15 @@ export class TrackedDocument<T> extends Disposable {
         this._forceDirtyStateChangeOnNextDocumentChange = true;
     }
 
-    private async update(options: { forceBlameChange?: boolean, initializing?: boolean } = {}) {
+    async update(options: { forceBlameChange?: boolean, initializing?: boolean } = {}) {
         if (this._disposed || this._uri === undefined) {
             this._hasRemotes = false;
             this._isTracked = false;
 
             return;
         }
+
+        this._isDirtyIdle = false;
 
         const active = getEditorIfActive(this.document);
         const wasBlameable = options.forceBlameChange ? undefined : this.isBlameable;

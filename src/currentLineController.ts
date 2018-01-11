@@ -1,13 +1,14 @@
 'use strict';
 import { Functions, IDeferrable } from './system';
-import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, ExtensionContext, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextEditor, TextEditorDecorationType, window } from 'vscode';
-import { AnnotationController, FileAnnotationType } from './annotations/annotationController';
+import { CancellationToken, ConfigurationChangeEvent, debug, DecorationRangeBehavior, DecorationRenderOptions, Disposable, Hover, HoverProvider, languages, Position, Range, StatusBarAlignment, StatusBarItem, TextDocument, TextEditor, TextEditorDecorationType, window } from 'vscode';
+import { FileAnnotationType } from './annotations/annotationController';
 import { Annotations } from './annotations/annotations';
 import { Commands } from './commands';
 import { configuration, IConfig, StatusBarCommand } from './configuration';
 import { isTextEditor, RangeEndOfLineIndex } from './constants';
-import { DocumentBlameStateChangeEvent, DocumentDirtyIdleStateChangeEvent, DocumentDirtyStateChangeEvent, DocumentTracker, GitDocumentState, TrackedDocument } from './trackers/documentTracker';
-import { CommitFormatter, GitCommit, GitCommitLine, GitService, ICommitFormatOptions } from './gitService';
+import { Container } from './container';
+import { DocumentBlameStateChangeEvent, DocumentDirtyIdleTriggerEvent, DocumentDirtyStateChangeEvent, GitDocumentState, TrackedDocument } from './trackers/documentTracker';
+import { CommitFormatter, GitCommit, GitCommitLine, ICommitFormatOptions } from './gitService';
 import { GitLineState, LineChangeEvent, LineTracker } from './trackers/lineTracker';
 
 const annotationDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
@@ -26,7 +27,6 @@ export enum LineAnnotationType {
 export class CurrentLineController extends Disposable {
 
     private _blameAnnotationState: { enabled: boolean, annotationType: LineAnnotationType, reason: 'user' | 'debugging' | 'dirty' } | undefined;
-    private _config: IConfig;
     private _editor: TextEditor | undefined;
     private _lineTracker: LineTracker<GitLineState>;
     private _statusBarItem: StatusBarItem | undefined;
@@ -36,12 +36,7 @@ export class CurrentLineController extends Disposable {
     private _hoverProviderDisposable: Disposable | undefined;
     private _lineTrackingDisposable: Disposable | undefined;
 
-    constructor(
-        context: ExtensionContext,
-        private readonly _git: GitService,
-        private readonly _tracker: DocumentTracker<GitDocumentState>,
-        private readonly _annotationController: AnnotationController
-    ) {
+    constructor() {
         super(() => this.dispose());
 
         this._lineTracker = new LineTracker<GitLineState>();
@@ -49,7 +44,7 @@ export class CurrentLineController extends Disposable {
         this._disposable = Disposable.from(
             this._lineTracker,
             configuration.onDidChange(this.onConfigurationChanged, this),
-            _annotationController.onDidToggleAnnotations(this.onFileAnnotationsToggled, this),
+            Container.annotations.onDidToggleAnnotations(this.onFileAnnotationsToggled, this),
             debug.onDidStartDebugSession(this.onDebugSessionStarted, this)
         );
         this.onConfigurationChanged(configuration.initializingChangeEvent);
@@ -105,8 +100,6 @@ export class CurrentLineController extends Disposable {
             }
         }
 
-        this._config = cfg;
-
         if (!changed) return;
 
         const trackCurrentLine = cfg.statusBar.enabled ||
@@ -118,9 +111,9 @@ export class CurrentLineController extends Disposable {
 
             this._lineTrackingDisposable = this._lineTrackingDisposable || Disposable.from(
                 this._lineTracker.onDidChangeActiveLine(this.onActiveLineChanged, this),
-                this._tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
-                this._tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this),
-                this._tracker.onDidChangeDirtyIdleState(this.onDirtyIdleStateChanged, this)
+                Container.tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+                Container.tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this),
+                Container.tracker.onDidTriggerDirtyIdle(this.onDirtyIdleTriggered, this)
             );
         }
         else {
@@ -172,12 +165,15 @@ export class CurrentLineController extends Disposable {
         this.setBlameAnnotationState(true, window.activeTextEditor, 'debugging');
     }
 
-    private onDirtyIdleStateChanged(e: DocumentDirtyIdleStateChangeEvent<GitDocumentState>) {
+    private onDirtyIdleTriggered(e: DocumentDirtyIdleTriggerEvent<GitDocumentState>) {
+        const maxLines = configuration.get<number>(configuration.name('advanced')('blame')('sizeThresholdAfterEdit').value);
+        if (maxLines > 0 && e.document.document.lineCount > maxLines) return;
+
         this.setBlameAnnotationState(true, window.activeTextEditor, 'dirty');
     }
 
     private async onDirtyStateChanged(e: DocumentDirtyStateChangeEvent<GitDocumentState>) {
-        this.setBlameAnnotationState(!e.dirty, window.activeTextEditor, 'dirty');
+        this.setBlameAnnotationState(!e.dirty, window.activeTextEditor, 'dirty', { force: true });
     }
 
     private onFileAnnotationsToggled() {
@@ -202,16 +198,16 @@ export class CurrentLineController extends Disposable {
         const commit = this._lineTracker.state !== undefined ? this._lineTracker.state.commit : undefined;
         if (commit === undefined) return undefined;
 
-        const fileAnnotations = this._annotationController.getAnnotationType(this._editor);
+        const fileAnnotations = await Container.annotations.getAnnotationType(this._editor);
         // Avoid double annotations if we are showing the whole-file hover blame annotations
-        if ((fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.details) ||
-            (fileAnnotations === FileAnnotationType.Hover && this._config.annotations.file.hover.details)) {
+        if ((fileAnnotations === FileAnnotationType.Gutter && Container.config.annotations.file.gutter.hover.details) ||
+            (fileAnnotations === FileAnnotationType.Hover && Container.config.annotations.file.hover.details)) {
             return undefined;
         }
 
         const state = this.getBlameAnnotationState();
-        const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && this._config.annotations.line.trailing.hover.wholeLine) ||
-            fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.wholeLine);
+        const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && Container.config.annotations.line.trailing.hover.wholeLine) ||
+            fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && Container.config.annotations.file.gutter.hover.wholeLine);
 
         const range = document.validateRange(new Range(position.line, wholeLine ? 0 : RangeEndOfLineIndex, position.line, RangeEndOfLineIndex));
         if (!wholeLine && range.start.character !== position.character) return undefined;
@@ -219,7 +215,7 @@ export class CurrentLineController extends Disposable {
         // Get the full commit message -- since blame only returns the summary
         let logCommit = this._lineTracker.state !== undefined ? this._lineTracker.state.logCommit : undefined;
         if (logCommit === undefined && !commit.isUncommitted) {
-            logCommit = await this._git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
+            logCommit = await Container.git.getLogCommit(commit.repoPath, commit.uri.fsPath, commit.sha);
             if (logCommit !== undefined) {
                 // Preserve the previous commit from the blame commit
                 logCommit.previousSha = commit.previousSha;
@@ -231,10 +227,10 @@ export class CurrentLineController extends Disposable {
             }
         }
 
-        const doc = this._tracker.get(document);
-        if (doc === undefined) return undefined;
+        const trackedDocument = await Container.tracker.get(document);
+        if (trackedDocument === undefined) return undefined;
 
-        const message = Annotations.getHoverMessage(logCommit || commit, this._config.defaultDateFormat, doc.hasRemotes, this._config.blame.file.annotationType);
+        const message = Annotations.getHoverMessage(logCommit || commit, Container.config.defaultDateFormat, trackedDocument.hasRemotes, Container.config.blame.file.annotationType);
         return new Hover(message, range);
     }
 
@@ -245,24 +241,24 @@ export class CurrentLineController extends Disposable {
         const commit = this._lineTracker.state !== undefined ? this._lineTracker.state.commit : undefined;
         if (commit === undefined) return undefined;
 
-        const fileAnnotations = this._annotationController.getAnnotationType(this._editor);
+        const fileAnnotations = await Container.annotations.getAnnotationType(this._editor);
         // Avoid double annotations if we are showing the whole-file hover blame annotations
-        if ((fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.changes) ||
-            (fileAnnotations === FileAnnotationType.Hover && this._config.annotations.file.hover.changes)) {
+        if ((fileAnnotations === FileAnnotationType.Gutter && Container.config.annotations.file.gutter.hover.changes) ||
+            (fileAnnotations === FileAnnotationType.Hover && Container.config.annotations.file.hover.changes)) {
             return undefined;
         }
 
         const state = this.getBlameAnnotationState();
-        const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && this._config.annotations.line.trailing.hover.wholeLine) ||
-            fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && this._config.annotations.file.gutter.hover.wholeLine);
+        const wholeLine = state.annotationType === LineAnnotationType.Hover || (state.annotationType === LineAnnotationType.Trailing && Container.config.annotations.line.trailing.hover.wholeLine) ||
+            fileAnnotations === FileAnnotationType.Hover || (fileAnnotations === FileAnnotationType.Gutter && Container.config.annotations.file.gutter.hover.wholeLine);
 
         const range = document.validateRange(new Range(position.line, wholeLine ? 0 : RangeEndOfLineIndex, position.line, RangeEndOfLineIndex));
         if (!wholeLine && range.start.character !== position.character) return undefined;
 
-        const doc = this._tracker.get(document);
-        if (doc === undefined) return undefined;
+        const trackedDocument = await Container.tracker.get(document);
+        if (trackedDocument === undefined) return undefined;
 
-        const hover = await Annotations.changesHover(commit, position.line, doc.uri, this._git);
+        const hover = await Annotations.changesHover(commit, position.line, trackedDocument.uri);
         if (hover.hoverMessage === undefined) return undefined;
 
         return new Hover(hover.hoverMessage, range);
@@ -273,9 +269,9 @@ export class CurrentLineController extends Disposable {
         if (editor.document === undefined) return;
 
         if (editor.document.isDirty) {
-            const doc = this._tracker.get(editor.document);
-            if (doc !== undefined) {
-                doc.setForceDirtyStateChangeOnNextDocumentChange();
+            const trackedDocument = await Container.tracker.get(editor.document);
+            if (trackedDocument !== undefined) {
+                trackedDocument.setForceDirtyStateChangeOnNextDocumentChange();
             }
         }
 
@@ -284,31 +280,31 @@ export class CurrentLineController extends Disposable {
     }
 
     async showAnnotations(editor: TextEditor | undefined, type: LineAnnotationType) {
-        this.setBlameAnnotationState(true, editor, 'user', type);
+        this.setBlameAnnotationState(true, editor, 'user', { type: type });
     }
 
     async toggleAnnotations(editor: TextEditor | undefined, type: LineAnnotationType) {
         if (editor === undefined) return;
 
         const state = this.getBlameAnnotationState();
-        this.setBlameAnnotationState(!state.enabled, editor, 'user', type);
+        this.setBlameAnnotationState(!state.enabled, editor, 'user', { type: type });
     }
 
-    private async setBlameAnnotationState(enabled: boolean, editor: TextEditor | undefined, reason: 'user' | 'debugging' | 'dirty', type?: LineAnnotationType) {
+    private async setBlameAnnotationState(enabled: boolean, editor: TextEditor | undefined, reason: 'user' | 'debugging' | 'dirty', options: { force?: boolean, type?: LineAnnotationType } = {}) {
         if (editor === undefined) return;
 
         // If we are trying to turn annotations on, check if it was the user, or a matching reason
         if (enabled && reason !== 'user' && reason !== (this._blameAnnotationState && this._blameAnnotationState.reason)) return;
 
         const state = this.getBlameAnnotationState();
-        if (type === undefined) {
-            type = state.annotationType;
+        if (options.type === undefined) {
+            options.type = state.annotationType;
         }
 
         // If we are off and want it off or we are on and want it on with matching annotation type
-        if (state.enabled === enabled && (!enabled || state.annotationType === type)) return;
+        if (!options.force && state.enabled === enabled && (!enabled || state.annotationType === options.type)) return;
 
-        this._blameAnnotationState = { enabled: !state.enabled, annotationType: type, reason: reason };
+        this._blameAnnotationState = { enabled: enabled, annotationType: options.type, reason: reason };
 
         await this.refresh(editor);
     }
@@ -320,7 +316,7 @@ export class CurrentLineController extends Disposable {
     }
 
     private getBlameAnnotationState() {
-        return this._blameAnnotationState !== undefined ? this._blameAnnotationState : this._config.blame.line;
+        return this._blameAnnotationState !== undefined ? this._blameAnnotationState : Container.config.blame.line;
     }
 
     private _updateBlameDebounced: ((line: number, editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>) => void) & IDeferrable;
@@ -346,15 +342,12 @@ export class CurrentLineController extends Disposable {
         const state = this.getBlameAnnotationState();
         if (state.enabled) {
             if (options.trackedDocument === undefined) {
-                options.trackedDocument = this._tracker.get(editor.document);
-                if (options.trackedDocument === undefined) {
-                    options.trackedDocument = await this._tracker.add(editor.document);
-                }
+                options.trackedDocument = await Container.tracker.getOrAdd(editor.document);
             }
 
             if (options.trackedDocument.isBlameable) {
                 if (state.enabled && (options.full || this._hoverProviderDisposable === undefined)) {
-                    this.registerHoverProviders(editor, state.annotationType === LineAnnotationType.Trailing ? this._config.annotations.line.trailing.hover : this._config.annotations.line.hover);
+                    this.registerHoverProviders(editor, state.annotationType === LineAnnotationType.Trailing ? Container.config.annotations.line.trailing.hover : Container.config.annotations.line.hover);
                 }
 
                 if (this._updateBlameDebounced === undefined) {
@@ -400,8 +393,8 @@ export class CurrentLineController extends Disposable {
         if (this._lineTracker.line !== line || this._updateBlameDebounced.pending!()) return;
 
         const blameLine = editor.document.isDirty
-            ? await this._git.getBlameForLineContents(trackedDocument.uri, line, editor.document.getText())
-            : await this._git.getBlameForLine(trackedDocument.uri, line);
+            ? await Container.git.getBlameForLineContents(trackedDocument.uri, line, editor.document.getText())
+            : await Container.git.getBlameForLine(trackedDocument.uri, line);
 
         let commit;
         let commitLine;
@@ -429,12 +422,12 @@ export class CurrentLineController extends Disposable {
     }
 
     private updateStatusBar(commit: GitCommit) {
-        const cfg = this._config.statusBar;
+        const cfg = Container.config.statusBar;
         if (!cfg.enabled || this._statusBarItem === undefined) return;
 
         this._statusBarItem.text = `$(git-commit) ${CommitFormatter.fromTemplate(cfg.format, commit, {
             truncateMessageAtNewLine: true,
-            dateFormat: cfg.dateFormat === null ? this._config.defaultDateFormat : cfg.dateFormat
+            dateFormat: cfg.dateFormat === null ? Container.config.defaultDateFormat : cfg.dateFormat
         } as ICommitFormatOptions)}`;
 
         switch (cfg.command) {
@@ -475,8 +468,8 @@ export class CurrentLineController extends Disposable {
 
         line = line === undefined ? blameLine.line : line;
 
-        const cfg = this._config.annotations.line.trailing;
-        const decoration = Annotations.trailing(commit, cfg.format, cfg.dateFormat === null ? this._config.defaultDateFormat : cfg.dateFormat);
+        const cfg = Container.config.annotations.line.trailing;
+        const decoration = Annotations.trailing(commit, cfg.format, cfg.dateFormat === null ? Container.config.defaultDateFormat : cfg.dateFormat);
         decoration.range = editor.document.validateRange(new Range(line, RangeEndOfLineIndex, line, RangeEndOfLineIndex));
 
         editor.setDecorations(annotationDecoration, [decoration]);

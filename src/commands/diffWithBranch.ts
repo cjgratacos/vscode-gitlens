@@ -3,8 +3,9 @@ import { Strings } from '../system';
 import { commands, TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
 import { ActiveEditorCommand, Commands, getCommandUri } from './common';
 import { GlyphChars } from '../constants';
+import { Container } from '../container';
 import { DiffWithCommandArgs } from './diffWith';
-import { GitService, GitUri } from '../gitService';
+import { GitUri } from '../gitService';
 import { Messages } from '../messages';
 import { BranchesAndTagsQuickPick, CommandQuickPickItem } from '../quickPicks';
 import * as path from 'path';
@@ -18,9 +19,7 @@ export interface DiffWithBranchCommandArgs {
 
 export class DiffWithBranchCommand extends ActiveEditorCommand {
 
-    constructor(
-        private readonly git: GitService
-    ) {
+    constructor() {
         super(Commands.DiffWithBranch);
     }
 
@@ -33,7 +32,7 @@ export class DiffWithBranchCommand extends ActiveEditorCommand {
             args.line = editor === undefined ? 0 : editor.selection.active.line;
         }
 
-        const gitUri = await GitUri.fromUri(uri, this.git);
+        const gitUri = await GitUri.fromUri(uri);
         if (!gitUri.repoPath) return Messages.showNoRepositoryWarningMessage(`Unable to open branch compare`);
 
         const placeHolder = `Compare ${path.basename(gitUri.fsPath)} with ${GlyphChars.Ellipsis}`;
@@ -41,8 +40,8 @@ export class DiffWithBranchCommand extends ActiveEditorCommand {
 
         try {
             const [branches, tags] = await Promise.all([
-                this.git.getBranches(gitUri.repoPath),
-                this.git.getTags(gitUri.repoPath)
+                Container.git.getBranches(gitUri.repoPath),
+                Container.git.getTags(gitUri.repoPath)
             ]);
 
             if (progressCancellation.token.isCancellationRequested) return undefined;
@@ -59,7 +58,7 @@ export class DiffWithBranchCommand extends ActiveEditorCommand {
             let renamedTitle: string | undefined;
 
             // Check to see if this file has been renamed
-            const statuses = await this.git.getDiffStatus(gitUri.repoPath, 'HEAD', ref, { filter: 'R' });
+            const statuses = await Container.git.getDiffStatus(gitUri.repoPath, 'HEAD', ref, { filter: 'R' });
             if (statuses !== undefined) {
                 const fileName = Strings.normalizePath(path.relative(gitUri.repoPath, gitUri.fsPath));
                 const rename = statuses.find(s => s.fileName === fileName);

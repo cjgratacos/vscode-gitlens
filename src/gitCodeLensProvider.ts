@@ -4,6 +4,7 @@ import { CancellationToken, CodeLens, CodeLensProvider, Command, commands, Docum
 import { Commands, DiffWithPreviousCommandArgs, ShowQuickCommitDetailsCommandArgs, ShowQuickCommitFileDetailsCommandArgs, ShowQuickFileHistoryCommandArgs } from './commands';
 import { CodeLensCommand, CodeLensLocations, configuration, ICodeLensConfig, ICodeLensLanguageLocation } from './configuration';
 import { BuiltInCommands, DocumentSchemes } from './constants';
+import { DocumentTracker, GitDocumentState } from './trackers/documentTracker';
 import { GitBlame, GitBlameCommit, GitBlameLines, GitService, GitUri } from './gitService';
 import { Logger } from './logger';
 
@@ -59,30 +60,31 @@ export class GitCodeLensProvider implements CodeLensProvider {
 
     constructor(
         context: ExtensionContext,
-        private readonly git: GitService
+        private readonly _git: GitService,
+        private readonly _tracker: DocumentTracker<GitDocumentState>
     ) { }
 
-    private _skipMaxLinesOnNext: boolean = false;
     reset(reason?: 'idle' | 'saved') {
-        if (reason === 'idle') {
-            this._skipMaxLinesOnNext = true;
-        }
-
         this._onDidChangeCodeLenses.fire();
     }
 
     async provideCodeLenses(document: TextDocument, token: CancellationToken): Promise<CodeLens[]> {
-        if (!await this.git.isTracked(document.uri.fsPath)) return [];
+        const trackedDocument = await this._tracker.getOrAdd(document);
+        if (!trackedDocument.isBlameable) return [];
 
         let dirty = false;
         if (document.isDirty) {
-            // TODO: Use another threshold setting
-            const maxLines = this._skipMaxLinesOnNext ? 0 : configuration.get<number>(configuration.name('advanced')('caching')('maxLines').value);
-            if (maxLines > 0 && document.lineCount > maxLines) {
+            // Only allow dirty blames if we are idle
+            if (trackedDocument.isDirtyIdle) {
+                const maxLines = configuration.get<number>(configuration.name('advanced')('blame')('sizeThresholdAfterEdit').value);
+                if (maxLines > 0 && document.lineCount > maxLines) {
+                    dirty = true;
+                }
+            }
+            else {
                 dirty = true;
             }
         }
-        this._skipMaxLinesOnNext = false;
 
         const cfg = configuration.get<ICodeLensConfig>(configuration.name('codeLens').value, document.uri);
         this._debug = cfg.debug;
@@ -102,25 +104,23 @@ export class GitCodeLensProvider implements CodeLensProvider {
 
         const lenses: CodeLens[] = [];
 
-        let gitUri: GitUri | undefined;
+        const gitUri = trackedDocument.uri;
         let blame: GitBlame | undefined;
-        let symbols: SymbolInformation[] | undefined;
+        let symbols;
 
         if (!dirty) {
-            gitUri = await GitUri.fromUri(document.uri, this.git);
-
             if (token.isCancellationRequested) return lenses;
 
             if (languageLocations.locations.length === 1 && languageLocations.locations.includes(CodeLensLocations.Document)) {
                 blame = document.isDirty
-                    ? await this.git.getBlameForFileContents(gitUri, document.getText())
-                    : await this.git.getBlameForFile(gitUri);
+                    ? await this._git.getBlameForFileContents(gitUri, document.getText())
+                    : await this._git.getBlameForFile(gitUri);
             }
             else {
                 [blame, symbols] = await Promise.all([
                     document.isDirty
-                        ? this.git.getBlameForFileContents(gitUri, document.getText())
-                        : this.git.getBlameForFile(gitUri),
+                        ? this._git.getBlameForFileContents(gitUri, document.getText())
+                        : this._git.getBlameForFile(gitUri),
                     commands.executeCommand(BuiltInCommands.ExecuteDocumentSymbolProvider, document.uri) as Promise<SymbolInformation[]>
                 ]);
             }
@@ -153,7 +153,7 @@ export class GitCodeLensProvider implements CodeLensProvider {
                 let blameForRangeFn: (() => GitBlameLines | undefined) | undefined = undefined;
                 if (dirty || cfg.recentChange.enabled) {
                     if (!dirty) {
-                        blameForRangeFn = Functions.once(() => this.git.getBlameForRangeSync(blame!, gitUri!, blameRange));
+                        blameForRangeFn = Functions.once(() => this._git.getBlameForRangeSync(blame!, gitUri!, blameRange));
                     }
                     lenses.push(new GitRecentChangeCodeLens(
                         SymbolKind.File,
@@ -168,7 +168,7 @@ export class GitCodeLensProvider implements CodeLensProvider {
                 }
                 if (!dirty && cfg.authors.enabled) {
                     if (blameForRangeFn === undefined) {
-                        blameForRangeFn = Functions.once(() => this.git.getBlameForRangeSync(blame!, gitUri!, blameRange));
+                        blameForRangeFn = Functions.once(() => this._git.getBlameForRangeSync(blame!, gitUri!, blameRange));
                     }
                     lenses.push(new GitAuthorsCodeLens(
                         SymbolKind.File,
@@ -259,7 +259,7 @@ export class GitCodeLensProvider implements CodeLensProvider {
         let blameForRangeFn: (() => GitBlameLines | undefined) | undefined;
         if (dirty || cfg.recentChange.enabled) {
             if (!dirty) {
-                blameForRangeFn = Functions.once(() => this.git.getBlameForRangeSync(blame!, gitUri!, blameRange));
+                blameForRangeFn = Functions.once(() => this._git.getBlameForRangeSync(blame!, gitUri!, blameRange));
             }
             lenses.push(new GitRecentChangeCodeLens(symbol.kind, gitUri, blameForRangeFn, blameRange, false, line.range.with(new Position(line.range.start.line, startChar)), cfg.recentChange.command, dirtyCommand));
             startChar++;
@@ -288,7 +288,7 @@ export class GitCodeLensProvider implements CodeLensProvider {
 
             if (multiline && !dirty) {
                 if (blameForRangeFn === undefined) {
-                    blameForRangeFn = Functions.once(() => this.git.getBlameForRangeSync(blame!, gitUri!, blameRange));
+                    blameForRangeFn = Functions.once(() => this._git.getBlameForRangeSync(blame!, gitUri!, blameRange));
                 }
                 lenses.push(new GitAuthorsCodeLens(symbol.kind, gitUri, blameForRangeFn, blameRange, false, line.range.with(new Position(line.range.start.line, startChar)), cfg.authors.command));
             }

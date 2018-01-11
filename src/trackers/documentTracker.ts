@@ -2,8 +2,7 @@
 import { Functions, IDeferrable, Strings } from './../system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, TextDocument, TextDocumentChangeEvent, TextEditor, Uri, window, workspace } from 'vscode';
 import { configuration } from './../configuration';
-import { CommandContext, isTextEditor, setCommandContext } from './../constants';
-// import { Logger } from './../logger';
+import { CommandContext, DocumentSchemes, isActiveDocument, isTextEditor, setCommandContext } from './../constants';
 import { DocumentBlameStateChangeEvent, TrackedDocument } from './trackedDocument';
 
 export { CachedBlame, CachedDiff, CachedLog, GitDocumentState } from './gitDocumentState';
@@ -16,7 +15,7 @@ export interface DocumentDirtyStateChangeEvent<T> {
     readonly dirty: boolean;
 }
 
-export interface DocumentDirtyIdleStateChangeEvent<T> {
+export interface DocumentDirtyIdleTriggerEvent<T> {
     readonly editor: TextEditor;
     readonly document: TrackedDocument<T>;
 }
@@ -33,11 +32,12 @@ export class DocumentTracker<T> extends Disposable {
         return this._onDidChangeDirtyState.event;
     }
 
-    private _onDidChangeDirtyIdleState = new EventEmitter<DocumentDirtyIdleStateChangeEvent<T>>();
-    get onDidChangeDirtyIdleState(): Event<DocumentDirtyIdleStateChangeEvent<T>> {
-        return this._onDidChangeDirtyIdleState.event;
+    private _onDidTriggerDirtyIdle = new EventEmitter<DocumentDirtyIdleTriggerEvent<T>>();
+    get onDidTriggerDirtyIdle(): Event<DocumentDirtyIdleTriggerEvent<T>> {
+        return this._onDidTriggerDirtyIdle.event;
     }
 
+    private _dirtyIdleTriggerDelay: number;
     private readonly _disposable: Disposable | undefined;
     private readonly _documentMap: Map<TextDocument | string, TrackedDocument<T>> = new Map();
 
@@ -48,72 +48,17 @@ export class DocumentTracker<T> extends Disposable {
             configuration.onDidChange(this.onConfigurationChanged, this),
             window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 0), this),
             workspace.onDidChangeTextDocument(Functions.debounce(this.onTextDocumentChanged, 50), this),
-            workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this)
+            workspace.onDidCloseTextDocument(this.onTextDocumentClosed, this),
+            workspace.onDidSaveTextDocument(this.onTextDocumentSaved, this)
         );
+
+        this.onConfigurationChanged(configuration.initializingChangeEvent);
     }
 
     dispose() {
         this._disposable && this._disposable.dispose();
 
         this.clear();
-    }
-
-    async add(fileName: string): Promise<TrackedDocument<T>>;
-    async add(document: TextDocument): Promise<TrackedDocument<T>>;
-    async add(uri: Uri): Promise<TrackedDocument<T>>;
-    async add(documentOrId: string | TextDocument | Uri): Promise<TrackedDocument<T>> {
-        if (typeof documentOrId === 'string') {
-            documentOrId = await workspace.openTextDocument(documentOrId);
-        }
-        else if (documentOrId instanceof Uri) {
-            documentOrId = await workspace.openTextDocument(documentOrId);
-        }
-
-        const doc = await this.addCore(documentOrId);
-        await doc.ensureInitialized();
-
-        return doc;
-    }
-
-    private addCore(document: TextDocument): TrackedDocument<T> {
-        const key = DocumentTracker.toStateKey(document.uri);
-
-        // Always start out false, so we will fire the event if needed
-        const doc = new TrackedDocument<T>(document, key, false, {
-            onDidBlameStateChange: (e: DocumentBlameStateChangeEvent<T>) => this._onDidChangeBlameState.fire(e)
-        });
-        this._documentMap.set(document, doc);
-        this._documentMap.set(key, doc);
-
-        return doc;
-    }
-
-    clear() {
-        for (const d of this._documentMap.values()) {
-            d.dispose();
-        }
-
-        this._documentMap.clear();
-    }
-
-    get(fileName: string): TrackedDocument<T> | undefined;
-    get(document: TextDocument): TrackedDocument<T> | undefined;
-    get(uri: Uri): TrackedDocument<T> | undefined;
-    get(key: string | TextDocument | Uri): TrackedDocument<T> | undefined {
-        if (typeof key === 'string' || key instanceof Uri) {
-            key = DocumentTracker.toStateKey(key);
-        }
-        return this._documentMap.get(key);
-    }
-
-    has(fileName: string): boolean;
-    has(document: TextDocument): boolean;
-    has(uri: Uri): boolean;
-    has(key: string | TextDocument | Uri): boolean {
-        if (typeof key === 'string' || key instanceof Uri) {
-            key = DocumentTracker.toStateKey(key);
-        }
-        return this._documentMap.has(key);
     }
 
     private onConfigurationChanged(e: ConfigurationChangeEvent) {
@@ -125,6 +70,12 @@ export class DocumentTracker<T> extends Disposable {
             for (const d of this._documentMap.values()) {
                 d.reset('config');
             }
+        }
+
+        const section = configuration.name('advanced')('blame')('delayAfterEdit').value;
+        if (initializing || configuration.changed(e, section)) {
+            this._dirtyIdleTriggerDelay = configuration.get<number>(section);
+            this._dirtyIdleTriggeredDebounced = undefined;
         }
     }
 
@@ -152,7 +103,7 @@ export class DocumentTracker<T> extends Disposable {
     }
 
     private onTextDocumentChanged(e: TextDocumentChangeEvent) {
-        if (e.document.uri.scheme !== 'file') return;
+        if (e.document.uri.scheme !== DocumentSchemes.File) return;
 
         let doc = this._documentMap.get(e.document);
         if (doc === undefined) {
@@ -164,13 +115,13 @@ export class DocumentTracker<T> extends Disposable {
         const dirty = e.document.isDirty;
         const editor = window.activeTextEditor;
 
-        // If we currently have a pending idle tracker, either reset or cancel it
-        if (this._dirtyIdleStateChangedDebounced !== undefined && this._dirtyIdleStateChangedDebounced.pending!()) {
+        // If we have an idle tracker, either reset or cancel it
+        if (this._dirtyIdleTriggeredDebounced !== undefined) {
             if (dirty) {
-                this._dirtyIdleStateChangedDebounced({ editor: editor!, document: doc });
+                this._dirtyIdleTriggeredDebounced({ editor: editor!, document: doc });
             }
             else {
-                this._dirtyIdleStateChangedDebounced.cancel();
+                this._dirtyIdleTriggeredDebounced.cancel();
             }
         }
 
@@ -185,47 +136,6 @@ export class DocumentTracker<T> extends Disposable {
         this.fireDocumentDirtyStateChanged({ editor: editor, document: doc, dirty: doc.dirty });
     }
 
-    private _dirtyIdleStateChangedDebounced: ((e: DocumentDirtyIdleStateChangeEvent<T>) => void) & IDeferrable;
-    private _dirtyStateChangedDebounced: ((e: DocumentDirtyStateChangeEvent<T>) => void) & IDeferrable;
-    private fireDocumentDirtyStateChanged(e: DocumentDirtyStateChangeEvent<T>) {
-        // Logger.log('DocumentTracker.fireDocumentDirtyStateChanged', e.document.uri.toString(), e.dirty);
-
-        if (e.dirty) {
-            setImmediate(() => {
-                if (this._dirtyStateChangedDebounced !== undefined) {
-                    this._dirtyStateChangedDebounced.cancel();
-                }
-
-                if (window.activeTextEditor !== e.editor) return;
-
-                this._onDidChangeDirtyState.fire(e);
-            });
-
-            if (this._dirtyIdleStateChangedDebounced === undefined) {
-                this._dirtyIdleStateChangedDebounced = Functions.debounce((e: DocumentDirtyIdleStateChangeEvent<T>) => {
-                    if (this._dirtyIdleStateChangedDebounced.pending!()) return;
-
-                    // Logger.log('DocumentTracker.fireDirtyIdleStateChanged', e.document.uri.toString());
-                    this._onDidChangeDirtyIdleState.fire(e);
-                }, 5000, { track: true });
-            }
-
-            this._dirtyIdleStateChangedDebounced({ editor: e.editor, document: e.document });
-
-            return;
-        }
-
-        if (this._dirtyStateChangedDebounced === undefined) {
-            this._dirtyStateChangedDebounced = Functions.debounce((e: DocumentDirtyStateChangeEvent<T>) => {
-                if (window.activeTextEditor !== e.editor) return;
-
-                this._onDidChangeDirtyState.fire(e);
-            }, 250);
-        }
-
-        this._dirtyStateChangedDebounced(e);
-    }
-
     private onTextDocumentClosed(document: TextDocument) {
         const doc = this._documentMap.get(document);
         if (doc === undefined) return;
@@ -233,6 +143,143 @@ export class DocumentTracker<T> extends Disposable {
         doc.dispose();
         this._documentMap.delete(document);
         this._documentMap.delete(doc.key);
+    }
+
+    private onTextDocumentSaved(document: TextDocument) {
+        let doc = this._documentMap.get(document);
+        if (doc !== undefined) {
+            doc.update({ forceBlameChange: true});
+
+            return;
+        }
+
+        // If we are saving the active document make sure we are tracking it
+        if (isActiveDocument(document)) {
+            doc = this.addCore(document);
+        }
+    }
+
+    async add(fileName: string): Promise<TrackedDocument<T>>;
+    async add(document: TextDocument): Promise<TrackedDocument<T>>;
+    async add(uri: Uri): Promise<TrackedDocument<T>>;
+    async add(documentOrId: string | TextDocument | Uri): Promise<TrackedDocument<T>> {
+        return this._add(documentOrId);
+    }
+
+    clear() {
+        for (const d of this._documentMap.values()) {
+            d.dispose();
+        }
+
+        this._documentMap.clear();
+    }
+
+    async get(fileName: string): Promise<TrackedDocument<T> | undefined>;
+    async get(document: TextDocument): Promise<TrackedDocument<T> | undefined>;
+    async get(uri: Uri): Promise<TrackedDocument<T> | undefined>;
+    async get(documentOrId: string | TextDocument | Uri): Promise<TrackedDocument<T> | undefined> {
+        return await this._get(documentOrId);
+    }
+
+    async getOrAdd(fileName: string): Promise<TrackedDocument<T>>;
+    async getOrAdd(document: TextDocument): Promise<TrackedDocument<T>>;
+    async getOrAdd(uri: Uri): Promise<TrackedDocument<T>>;
+    async getOrAdd(documentOrId: string | TextDocument | Uri): Promise<TrackedDocument<T>> {
+        return await this._get(documentOrId) || await this._add(documentOrId);
+    }
+
+    has(fileName: string): boolean;
+    has(document: TextDocument): boolean;
+    has(uri: Uri): boolean;
+    has(key: string | TextDocument | Uri): boolean {
+        if (typeof key === 'string' || key instanceof Uri) {
+            key = DocumentTracker.toStateKey(key);
+        }
+        return this._documentMap.has(key);
+    }
+
+    private async _add(documentOrId: string | TextDocument | Uri): Promise<TrackedDocument<T>> {
+        if (typeof documentOrId === 'string') {
+            documentOrId = await workspace.openTextDocument(documentOrId);
+        }
+        else if (documentOrId instanceof Uri) {
+            documentOrId = await workspace.openTextDocument(documentOrId);
+        }
+
+        const doc = await this.addCore(documentOrId);
+        await doc.ensureInitialized();
+
+        return doc;
+    }
+
+    private async _get(documentOrId: string | TextDocument | Uri) {
+        if (typeof documentOrId === 'string' || documentOrId instanceof Uri) {
+            documentOrId = DocumentTracker.toStateKey(documentOrId);
+        }
+
+        const doc = this._documentMap.get(documentOrId);
+        if (doc === undefined) return undefined;
+
+        await doc.ensureInitialized();
+        return doc;
+    }
+
+    private addCore(document: TextDocument): TrackedDocument<T> {
+        const key = DocumentTracker.toStateKey(document.uri);
+
+        // Always start out false, so we will fire the event if needed
+        const doc = new TrackedDocument<T>(document, key, false, {
+            onDidBlameStateChange: (e: DocumentBlameStateChangeEvent<T>) => this._onDidChangeBlameState.fire(e)
+        });
+        this._documentMap.set(document, doc);
+        this._documentMap.set(key, doc);
+
+        return doc;
+    }
+
+    private _dirtyIdleTriggeredDebounced: (((e: DocumentDirtyIdleTriggerEvent<T>) => void) & IDeferrable) | undefined;
+    private _dirtyStateChangedDebounced: (((e: DocumentDirtyStateChangeEvent<T>) => void) & IDeferrable) | undefined;
+    private fireDocumentDirtyStateChanged(e: DocumentDirtyStateChangeEvent<T>) {
+        if (e.dirty) {
+            setImmediate(async () => {
+                if (this._dirtyStateChangedDebounced !== undefined) {
+                    this._dirtyStateChangedDebounced.cancel();
+                }
+
+                if (window.activeTextEditor !== e.editor) return;
+
+                await e.document.ensureInitialized();
+                this._onDidChangeDirtyState.fire(e);
+            });
+
+            if (this._dirtyIdleTriggerDelay > 0) {
+                if (this._dirtyIdleTriggeredDebounced === undefined) {
+                    this._dirtyIdleTriggeredDebounced = Functions.debounce(async (e: DocumentDirtyIdleTriggerEvent<T>) => {
+                        if (this._dirtyIdleTriggeredDebounced !== undefined && this._dirtyIdleTriggeredDebounced.pending!()) return;
+
+                        await e.document.ensureInitialized();
+
+                        e.document.isDirtyIdle = true;
+                        this._onDidTriggerDirtyIdle.fire(e);
+                    }, this._dirtyIdleTriggerDelay, { track: true });
+                }
+
+                this._dirtyIdleTriggeredDebounced({ editor: e.editor, document: e.document });
+            }
+
+            return;
+        }
+
+        if (this._dirtyStateChangedDebounced === undefined) {
+            this._dirtyStateChangedDebounced = Functions.debounce(async (e: DocumentDirtyStateChangeEvent<T>) => {
+                if (window.activeTextEditor !== e.editor) return;
+
+                await e.document.ensureInitialized();
+                this._onDidChangeDirtyState.fire(e);
+            }, 250);
+        }
+
+        this._dirtyStateChangedDebounced(e);
     }
 
     static toStateKey(fileName: string): string;

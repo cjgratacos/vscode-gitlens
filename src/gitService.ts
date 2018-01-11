@@ -1,8 +1,9 @@
 'use strict';
 import { Iterables, Objects, Strings, TernarySearchTree } from './system';
 import { ConfigurationChangeEvent, Disposable, Event, EventEmitter, Range, TextEditor, Uri, window, WindowState, workspace, WorkspaceFolder, WorkspaceFoldersChangeEvent } from 'vscode';
-import { configuration, IConfig, IRemotesConfig } from './configuration';
+import { configuration, IRemotesConfig } from './configuration';
 import { CommandContext, DocumentSchemes, setCommandContext } from './constants';
+import { Container } from './container';
 import { CachedBlame, CachedDiff, CachedLog, DocumentTracker, GitDocumentState, TrackedDocument } from './trackers/documentTracker';
 import { RemoteProviderFactory, RemoteProviderMap } from './git/remotes/factory';
 import { CommitFormatting, Git, GitAuthor, GitBlame, GitBlameCommit, GitBlameLine, GitBlameLines, GitBlameParser, GitBranch, GitBranchParser, GitCommit, GitCommitType, GitDiff, GitDiffChunkLine, GitDiffParser, GitDiffShortStat, GitLog, GitLogCommit, GitLogParser, GitRemote, GitRemoteParser, GitStash, GitStashParser, GitStatus, GitStatusFile, GitStatusParser, GitTag, GitTagParser, IGit, Repository } from './git/git';
@@ -34,8 +35,6 @@ export class GitService extends Disposable {
     static stagedUncommittedSha = Git.stagedUncommittedSha;
     static uncommittedSha = Git.uncommittedSha;
 
-    config: IConfig;
-
     private _onDidChangeRepositories = new EventEmitter<void>();
     get onDidChangeRepositories(): Event<void> {
         return this._onDidChangeRepositories.event;
@@ -47,7 +46,7 @@ export class GitService extends Disposable {
     private _suspended: boolean = false;
     private readonly _trackedCache: Map<string, boolean | Promise<boolean>>;
 
-    constructor(private readonly _tracker: DocumentTracker<GitDocumentState>) {
+    constructor() {
         super(() => this.dispose());
 
         this._repositoryTree = TernarySearchTree.forPaths();
@@ -71,7 +70,7 @@ export class GitService extends Disposable {
     }
 
     get UseCaching() {
-        return this.config.advanced.caching.enabled;
+        return Container.config.advanced.caching.enabled;
     }
 
     private onAnyRepositoryChanged(repo: Repository) {
@@ -81,15 +80,11 @@ export class GitService extends Disposable {
     private onConfigurationChanged(e: ConfigurationChangeEvent) {
         const initializing = configuration.initializing(e);
 
-        const cfg = configuration.get<IConfig>();
-
         if (initializing ||
             configuration.changed(e, configuration.name('defaultDateStyle').value) ||
             configuration.changed(e, configuration.name('defaultDateFormat').value)) {
             CommitFormatting.reset();
         }
-
-        this.config = cfg;
     }
 
     private onWindowStateChanged(e: WindowState) {
@@ -160,7 +155,7 @@ export class GitService extends Disposable {
 
         const rootPath = await this.getRepoPathCore(folderUri.fsPath, true);
         if (rootPath !== undefined) {
-            repositories.push(new Repository(folder, rootPath, true, this, anyRepoChangedFn, this._suspended));
+            repositories.push(new Repository(folder, rootPath, true, anyRepoChangedFn, this._suspended));
         }
 
         const depth = configuration.get<number>(configuration.name('advanced')('repositorySearchDepth').value, folderUri);
@@ -198,14 +193,14 @@ export class GitService extends Disposable {
             const rp = await this.getRepoPathCore(p, true);
             if (rp === undefined) continue;
 
-            repositories.push(new Repository(folder, rp, false, this, anyRepoChangedFn, this._suspended));
+            repositories.push(new Repository(folder, rp, false, anyRepoChangedFn, this._suspended));
         }
 
         // const uris = await workspace.findFiles(new RelativePattern(folder, '**/.git/HEAD'));
         // for (const uri of uris) {
         //     const rp = await this.getRepoPathCore(path.resolve(path.dirname(uri.fsPath), '../'), true);
         //     if (rp !== undefined && rp !== rootPath) {
-        //         repositories.push(new Repository(folder, rp, false, this, anyRepoChangedFn, this._suspended));
+        //         repositories.push(new Repository(folder, rp, false, anyRepoChangedFn, this._suspended));
         //     }
         // }
 
@@ -374,26 +369,13 @@ export class GitService extends Disposable {
         return repo.path;
     }
 
-    // public async getBlameability(uri: GitUri): Promise<boolean> {
-    //     if (!this.UseCaching) return await this.isTracked(uri);
-
-    //     const doc = this._documentTracker.get(uri);
-    //     if (doc === undefined || doc.state === undefined) return await this.isTracked(uri);
-
-    //     return !doc.state.hasErrors;
-    // }
-
     async getBlameForFile(uri: GitUri): Promise<GitBlame | undefined> {
         let key = 'blame';
         if (uri.sha !== undefined) {
             key += `:${uri.sha}`;
         }
 
-        let doc = this._tracker.get(uri);
-        if (doc === undefined) {
-            doc = await this._tracker.add(uri);
-        }
-
+        const doc = await Container.tracker.getOrAdd(uri);
         if (this.UseCaching) {
             if (doc.state !== undefined) {
                 const cachedBlame = doc.state.get<CachedBlame>(key);
@@ -435,7 +417,7 @@ export class GitService extends Disposable {
         const [file, root] = Git.splitPath(uri.fsPath, uri.repoPath, false);
 
         try {
-            const data = await Git.blame(root, file, uri.sha, { ignoreWhitespace: this.config.blame.ignoreWhitespace });
+            const data = await Git.blame(root, file, uri.sha, { ignoreWhitespace: Container.config.blame.ignoreWhitespace });
             const blame = GitBlameParser.parse(data, root, file);
             return blame;
         }
@@ -462,11 +444,7 @@ export class GitService extends Disposable {
     async getBlameForFileContents(uri: GitUri, contents: string): Promise<GitBlame | undefined> {
         const key = `blame:${Strings.sha1(contents)}`;
 
-        let doc = this._tracker.get(uri);
-        if (doc === undefined) {
-            doc = await this._tracker.add(uri);
-        }
-
+        const doc = await Container.tracker.getOrAdd(uri);
         if (this.UseCaching) {
             if (doc.state !== undefined) {
                 const cachedBlame = doc.state.get<CachedBlame>(key);
@@ -508,7 +486,7 @@ export class GitService extends Disposable {
         const [file, root] = Git.splitPath(uri.fsPath, uri.repoPath, false);
 
         try {
-            const data = await Git.blame_contents(root, file, contents, { correlationKey: `:${key}`, ignoreWhitespace: this.config.blame.ignoreWhitespace });
+            const data = await Git.blame_contents(root, file, contents, { correlationKey: `:${key}`, ignoreWhitespace: Container.config.blame.ignoreWhitespace });
             const blame = GitBlameParser.parse(data, root, file);
             return blame;
         }
@@ -558,7 +536,7 @@ export class GitService extends Disposable {
         const fileName = uri.fsPath;
 
         try {
-            const data = await Git.blame(uri.repoPath, fileName, uri.sha, { ignoreWhitespace: this.config.blame.ignoreWhitespace, startLine: lineToBlame, endLine: lineToBlame });
+            const data = await Git.blame(uri.repoPath, fileName, uri.sha, { ignoreWhitespace: Container.config.blame.ignoreWhitespace, startLine: lineToBlame, endLine: lineToBlame });
             const blame = GitBlameParser.parse(data, uri.repoPath, fileName);
             if (blame === undefined) return undefined;
 
@@ -600,7 +578,7 @@ export class GitService extends Disposable {
         const fileName = uri.fsPath;
 
         try {
-            const data = await Git.blame_contents(uri.repoPath, fileName, contents, { ignoreWhitespace: this.config.blame.ignoreWhitespace, startLine: lineToBlame, endLine: lineToBlame });
+            const data = await Git.blame_contents(uri.repoPath, fileName, contents, { ignoreWhitespace: Container.config.blame.ignoreWhitespace, startLine: lineToBlame, endLine: lineToBlame });
             const blame = GitBlameParser.parse(data, uri.repoPath, fileName);
             if (blame === undefined) return undefined;
 
@@ -706,8 +684,8 @@ export class GitService extends Disposable {
         return await Git.config_get(key, repoPath);
     }
 
-    getGitUri(uri: Uri) {
-        const doc = this._tracker.get(uri);
+    async getGitUri(uri: Uri) {
+        const doc = await Container.tracker.get(uri);
         return doc !== undefined ? doc.uri : undefined;
     }
 
@@ -724,11 +702,7 @@ export class GitService extends Disposable {
             key += `:${sha2}`;
         }
 
-        let doc = this._tracker.get(uri);
-        if (doc === undefined) {
-            doc = await this._tracker.add(uri);
-        }
-
+        const doc = await Container.tracker.getOrAdd(uri);
         if (this.UseCaching) {
             if (doc.state !== undefined) {
                 const cachedDiff = doc.state.get<CachedDiff>(key);
@@ -850,7 +824,7 @@ export class GitService extends Disposable {
         Logger.log(`getLogForRepo('${repoPath}', '${options.ref}', ${options.maxCount}, ${options.reverse})`);
 
         const maxCount = options.maxCount == null
-            ? this.config.advanced.maxQuickHistory || 0
+            ? Container.config.advanced.maxListItems || 0
             : options.maxCount;
 
         try {
@@ -873,7 +847,7 @@ export class GitService extends Disposable {
         Logger.log(`getLogForRepoSearch('${repoPath}', '${search}', '${searchBy}', ${options.maxCount})`);
 
         let maxCount = options.maxCount == null
-            ? this.config.advanced.maxQuickHistory || 0
+            ? Container.config.advanced.maxListItems || 0
             : options.maxCount;
 
         let searchArgs: string[] | undefined = undefined;
@@ -926,11 +900,7 @@ export class GitService extends Disposable {
             key += `:n${options.maxCount}`;
         }
 
-        let doc = this._tracker.get(fileName);
-        if (doc === undefined) {
-            doc = await this._tracker.add(fileName);
-        }
-
+        const doc = await Container.tracker.getOrAdd(fileName);
         if (this.UseCaching && options.range === undefined && !options.reverse) {
             if (doc.state !== undefined) {
                 const cachedLog = doc.state.get<CachedLog>(key);
@@ -993,7 +963,7 @@ export class GitService extends Disposable {
             const { range, ...opts } = options;
 
             const maxCount = options.maxCount == null
-                ? this.config.advanced.maxQuickHistory || 0
+                ? Container.config.advanced.maxListItems || 0
                 : options.maxCount;
 
             const data = await Git.log_file(root, file, { ...opts, maxCount: maxCount, startLine: range && range.start.line + 1, endLine: range && range.end.line + 1 });
@@ -1105,7 +1075,7 @@ export class GitService extends Disposable {
             : root.folder;
 
         if (folder !== undefined) {
-            const repo = new Repository(folder, rp, false, this, this.onAnyRepositoryChanged.bind(this), this._suspended);
+            const repo = new Repository(folder, rp, false, this.onAnyRepositoryChanged.bind(this), this._suspended);
             this._repositoryTree.set(rp, repo);
 
             // Send a notification that the repositories changed
@@ -1238,18 +1208,6 @@ export class GitService extends Disposable {
         Logger.log(`getVersionedFileText('${repoPath}', '${fileName}', ${sha})`);
 
         return Git.show(repoPath, fileName, sha, { encoding: GitService.getEncoding(repoPath, fileName) });
-    }
-
-    hasGitUriForFile(editor: TextEditor): boolean {
-        if (editor === undefined) return false;
-
-        return this._tracker.has(editor.document);
-    }
-
-    isEditorBlameable(editor: TextEditor): boolean {
-        return editor.viewColumn !== undefined ||
-            this.isTrackable(editor.document.uri) ||
-            this.hasGitUriForFile(editor);
     }
 
     isTrackable(scheme: string): boolean;

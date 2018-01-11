@@ -1,9 +1,8 @@
 'use strict';
 import { Functions } from '../system';
-import { DecorationOptions, Disposable, ExtensionContext, TextDocument, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, Uri, window } from 'vscode';
+import { DecorationOptions, Disposable, TextDocument, TextEditor, TextEditorDecorationType, TextEditorSelectionChangeEvent, Uri, window } from 'vscode';
 import { FileAnnotationType } from '../annotations/annotationController';
 import { TextDocumentComparer } from '../comparers';
-import { configuration, IConfig } from '../configuration';
 import { GitDocumentState, TrackedDocument } from '../trackers/documentTracker';
 
 export type TextEditorCorrelationKey = string;
@@ -18,12 +17,10 @@ export abstract class AnnotationProviderBase extends Disposable {
     public correlationKey: TextEditorCorrelationKey;
     public document: TextDocument;
 
-    protected _config: IConfig;
     protected _decorations: DecorationOptions[] | undefined;
     protected _disposable: Disposable;
 
     constructor(
-        context: ExtensionContext,
         public editor: TextEditor,
         protected readonly trackedDocument: TrackedDocument<GitDocumentState>,
         protected _decoration: TextEditorDecorationType | undefined,
@@ -33,8 +30,6 @@ export abstract class AnnotationProviderBase extends Disposable {
 
         this.correlationKey = AnnotationProviderBase.getCorrelationKey(this.editor);
         this.document = this.editor.document;
-
-        this._config = configuration.get<IConfig>();
 
         this._disposable = Disposable.from(
             window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this)
@@ -96,7 +91,6 @@ export abstract class AnnotationProviderBase extends Disposable {
             this._highlightDecoration = changes.highlightDecoration;
         }
 
-        this._config = configuration.get<IConfig>();
         await this.provideAnnotation(this.editor === undefined ? undefined : this.editor.selection.active.line);
     }
 

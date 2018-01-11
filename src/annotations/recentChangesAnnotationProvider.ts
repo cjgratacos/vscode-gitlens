@@ -1,11 +1,12 @@
 'use strict';
-import { DecorationOptions, ExtensionContext, MarkdownString, Position, Range, TextEditor, TextEditorDecorationType } from 'vscode';
+import { DecorationOptions, MarkdownString, Position, Range, TextEditor, TextEditorDecorationType } from 'vscode';
 import { FileAnnotationType } from './annotationController';
 import { AnnotationProviderBase } from './annotationProvider';
 import { Annotations } from './annotations';
 import { RangeEndOfLineIndex } from '../constants';
+import { Container } from '../container';
 import { GitDocumentState, TrackedDocument } from '../trackers/documentTracker';
-import { GitService, GitUri } from '../gitService';
+import { GitUri } from '../gitService';
 import { Logger } from '../logger';
 
 export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
@@ -13,29 +14,27 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
     private readonly _uri: GitUri;
 
     constructor(
-        context: ExtensionContext,
         editor: TextEditor,
         trackedDocument: TrackedDocument<GitDocumentState>,
         decoration: TextEditorDecorationType | undefined,
-        highlightDecoration: TextEditorDecorationType | undefined,
-        private readonly git: GitService
+        highlightDecoration: TextEditorDecorationType | undefined
     ) {
-        super(context, editor, trackedDocument, decoration, highlightDecoration);
+        super(editor, trackedDocument, decoration, highlightDecoration);
     }
 
     async onProvideAnnotation(shaOrLine?: string | number): Promise<boolean> {
         this.annotationType = FileAnnotationType.RecentChanges;
 
-        const commit = await this.git.getLogCommit(this._uri.repoPath, this._uri.fsPath, { previous: true });
+        const commit = await Container.git.getLogCommit(this._uri.repoPath, this._uri.fsPath, { previous: true });
         if (commit === undefined) return false;
 
-        const diff = await this.git.getDiffForFile(this._uri, commit.previousSha);
+        const diff = await Container.git.getDiffForFile(this._uri, commit.previousSha);
         if (diff === undefined) return false;
 
         const start = process.hrtime();
 
-        const cfg = this._config.annotations.file.recentChanges;
-        const dateFormat = this._config.defaultDateFormat;
+        const cfg = Container.config.annotations.file.recentChanges;
+        const dateFormat = Container.config.defaultDateFormat;
 
         this._decorations = [];
 
@@ -52,7 +51,7 @@ export class RecentChangesAnnotationProvider extends AnnotationProviderBase {
 
                 if (cfg.hover.details) {
                     this._decorations.push({
-                        hoverMessage: Annotations.getHoverMessage(commit, dateFormat, await this.git.hasRemote(commit.repoPath), this._config.blame.file.annotationType),
+                        hoverMessage: Annotations.getHoverMessage(commit, dateFormat, await Container.git.hasRemote(commit.repoPath), Container.config.blame.file.annotationType),
                         range: range
                     } as DecorationOptions);
                 }

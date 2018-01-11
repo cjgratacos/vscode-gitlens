@@ -238,7 +238,7 @@ export class Git {
             params.push(`-L ${options.startLine},${options.endLine}`);
         }
 
-        let stdin: string | undefined;
+        let stdin;
         if (sha) {
             if (Git.isStagedUncommitted(sha)) {
                 // Pipe the blame contents to stdin
