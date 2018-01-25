@@ -24,6 +24,10 @@ export class BranchNode extends ExplorerRefNode {
         return this.branch.name;
     }
 
+    get label(): string {
+        return this.branch.getBasename();
+    }
+
     async getChildren(): Promise<ExplorerNode[]> {
         const log = await Container.git.getLog(this.uri.repoPath!, { maxCount: this.maxCount, ref: this.branch.name });
         if (log === undefined) return [new MessageNode('No commits yet')];
@@ -36,7 +40,7 @@ export class BranchNode extends ExplorerRefNode {
     }
 
     async getTreeItem(): Promise<TreeItem> {
-        let name = this.branch.getName();
+        let name = this.branch.getBasename();
         if (!this.branch.remote && this.branch.tracking !== undefined && this.explorer.config.showTrackingBranch) {
             name += ` ${GlyphChars.Space}${GlyphChars.ArrowLeftRight}${GlyphChars.Space} ${this.branch.tracking}`;
         }
