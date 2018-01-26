@@ -7,6 +7,7 @@ import { Container } from '../container';
 import { ExplorerNode, ExplorerRefNode, MessageNode, ResourceType, ShowAllNode } from './explorerNode';
 import { GitExplorer } from './gitExplorer';
 import { GitBranch, GitUri } from '../gitService';
+import { ExplorerBranchesLayout } from '../configuration';
 
 export class BranchNode extends ExplorerRefNode {
 
@@ -25,7 +26,11 @@ export class BranchNode extends ExplorerRefNode {
     }
 
     get label(): string {
-        return this.branch.getBasename();
+        if (this.explorer.config.branches.layout === ExplorerBranchesLayout.List) {
+            return this.branch.getName();
+        } else {
+            return this.branch.getBasename();
+        }
     }
 
     async getChildren(): Promise<ExplorerNode[]> {
@@ -40,7 +45,7 @@ export class BranchNode extends ExplorerRefNode {
     }
 
     async getTreeItem(): Promise<TreeItem> {
-        let name = this.branch.getBasename();
+        let name = this.label;
         if (!this.branch.remote && this.branch.tracking !== undefined && this.explorer.config.showTrackingBranch) {
             name += ` ${GlyphChars.Space}${GlyphChars.ArrowLeftRight}${GlyphChars.Space} ${this.branch.tracking}`;
         }
