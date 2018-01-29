@@ -33,6 +33,10 @@ export class BranchNode extends ExplorerRefNode {
         }
     }
 
+    get current(): boolean {
+        return this.branch.current;
+    }
+
     async getChildren(): Promise<ExplorerNode[]> {
         const log = await Container.git.getLog(this.uri.repoPath!, { maxCount: this.maxCount, ref: this.branch.name });
         if (log === undefined) return [new MessageNode('No commits yet')];
