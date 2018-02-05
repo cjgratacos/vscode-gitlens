@@ -38,6 +38,10 @@ export class GitBranch {
         };
     }
 
+    getBasename(): string {
+        return this.basename;
+    }
+
     private _name: string | undefined;
     getName(): string {
         if (this._name === undefined) {
@@ -47,10 +51,6 @@ export class GitBranch {
         }
 
         return this._name;
-    }
-
-    getBasename(): string {
-        return this.basename;
     }
 
     getRemote(): string | undefined {

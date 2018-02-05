@@ -34,16 +34,16 @@ export enum DateStyle {
     Relative = 'relative'
 }
 
-export enum ExplorerFilesLayout {
-    Auto = 'auto',
-    List = 'list',
-    Tree = 'tree'
-}
-
 export enum ExplorerBranchesLayout {
     List = 'list',
     Tree = 'tree',
     MixTree = 'mix-tree'
+}
+
+export enum ExplorerFilesLayout {
+    Auto = 'auto',
+    List = 'list',
+    Tree = 'tree'
 }
 
 export enum FileAnnotationType {
